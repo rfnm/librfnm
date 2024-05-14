@@ -77,7 +77,7 @@ RFNM_PACKED_STRUCT(
 	int64_t freq_min;
 	int64_t freq_max;
 	int64_t freq;
-	int16_t iq_lpf_bw;
+	int16_t rfic_lpf_bw;
 	int16_t samp_freq_div_m;
 	int16_t samp_freq_div_n;
 	int8_t avail;
@@ -102,7 +102,7 @@ RFNM_PACKED_STRUCT(
 	int64_t freq_min;
 	int64_t freq_max;
 	int64_t freq;
-	int16_t iq_lpf_bw;
+	int16_t rfic_lpf_bw;
 	int16_t samp_freq_div_m;
 	int16_t samp_freq_div_n;
 	int8_t avail;
