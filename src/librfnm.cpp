@@ -178,9 +178,10 @@ void librfnm::threadfn(size_t thread_index) {
 
             
             libusb_device_handle* lusb_handle = usb_handle->primary;
-            if (0 && librfnm_s->transport_status.usb_boost_connected) {
+            if (1 && librfnm_s->transport_status.usb_boost_connected) {
                 std::lock_guard<std::mutex> lockGuard(librfnm_s_transport_pp_mutex);
-                if (librfnm_s->transport_status.boost_pp_rx) {
+                //if (librfnm_s->transport_status.boost_pp_rx) {
+                if ((tpm.ep_id % 2) == 0) {
                     lusb_handle = usb_handle->boost;
                 }
                 librfnm_s->transport_status.boost_pp_rx = !librfnm_s->transport_status.boost_pp_rx;
@@ -580,6 +581,8 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
             }
         }
 
+        spdlog::info("Max theoretical transport speed is {} Mbps", librfnm_s->transport_status.theoretical_mbps);
+
         r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST, RFNM_GET_SM_RESET, 0, NULL, 0, 500);
         if (r < 0) {
             spdlog::error("Couldn't reset state machine");
@@ -954,18 +957,63 @@ MSDLL void librfnm::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
         librfnm_rx_s.out_mutex.lock();
     }
     librfnm_rx_s.in_mutex.lock();
+#if 1
+    if (librfnm_rx_s.out[adc_id].size()) {
 
-    while (librfnm_rx_s.out[adc_id].size()) {
+        int size = librfnm_rx_s.out[adc_id].size();
+
+        for (int i = 0; i < /*size / 2*/1; i++) {
+
+            buf = librfnm_rx_s.out[adc_id].top();
+            librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc + 1;
+            librfnm_rx_s.in.push(buf);
+            librfnm_rx_s.out[adc_id].pop();
+
+            //spdlog::info("new cc {}", librfnm_rx_s.usb_cc[adc_id]);
+
+        }
+    }
+#else
+    if (librfnm_rx_s.out[adc_id].size()) {
+
         buf = librfnm_rx_s.out[adc_id].top();
-        // jump forward a one buffers 
-        // ideally we should jump a few buffers
-        // (but you'd then need to flush those previous ones as well)
         librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc + 1;
         librfnm_rx_s.in.push(buf);
         librfnm_rx_s.out[adc_id].pop();
-        //spdlog::info("flushing queue {}", buf->usb_cc);
-    } 
 
+        spdlog::info("new cc {}", librfnm_rx_s.usb_cc[adc_id]);
+
+        int drop_cnt = 0;
+        int save_cnt = 0;
+
+        std::priority_queue<struct librfnm_rx_buf*, std::vector<struct librfnm_rx_buf*>, librfnm_rx_buf_compare> tq;
+
+        while (librfnm_rx_s.out[adc_id].size()) {
+            buf = librfnm_rx_s.out[adc_id].top();
+            if (buf->usb_cc < librfnm_rx_s.usb_cc[adc_id]) {
+                librfnm_rx_s.in.push(buf);
+
+                drop_cnt++;
+            }
+            else {
+                tq.push(buf);
+                //     spdlog::info("saving {}", buf->usb_cc);
+                save_cnt++;
+            }
+
+
+            librfnm_rx_s.out[adc_id].pop();
+        }
+
+        spdlog::info("dropping {} saving {}", drop_cnt, save_cnt);
+
+        while (tq.size()) {
+            buf = tq.top();
+            librfnm_rx_s.out[adc_id].push(buf);
+            tq.pop();
+        }
+    }
+#endif
     //spdlog::info("new cc is {}", librfnm_rx_s.usb_cc[adc_id]);
 
     librfnm_rx_s.in_mutex.unlock();
@@ -973,6 +1021,7 @@ MSDLL void librfnm::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
         librfnm_rx_s.out_mutex.unlock();
     }
 }
+
 MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     //return librfnm_rx_s.out[adc_id].size() > 50;
 
@@ -1001,7 +1050,8 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         return 1;
     }
     else {
-        if (queue_size > LIBRFNM_RX_RECOMB_BUF_LEN) {
+        if (acquire_lock && queue_size > LIBRFNM_RX_RECOMB_BUF_LEN) {
+        //if (queue_size > LIBRFNM_RX_RECOMB_BUF_LEN) {
             spdlog::info("cc {} overwritten at queue size {} adc {}", librfnm_rx_s.usb_cc[librfnm_rx_s.required_adc_id], queue_size, librfnm_rx_s.required_adc_id);
             dqbuf_overwrite_cc(adc_id, acquire_lock);
         }
