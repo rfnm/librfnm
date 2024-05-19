@@ -178,13 +178,13 @@ void librfnm::threadfn(size_t thread_index) {
 
             
             libusb_device_handle* lusb_handle = usb_handle->primary;
-            if (1 && librfnm_s->transport_status.usb_boost_connected) {
+            if (1 && s->transport_status.usb_boost_connected) {
                 std::lock_guard<std::mutex> lockGuard(librfnm_s_transport_pp_mutex);
-                //if (librfnm_s->transport_status.boost_pp_rx) {
+                //if (s->transport_status.boost_pp_rx) {
                 if ((tpm.ep_id % 2) == 0) {
                     lusb_handle = usb_handle->boost;
                 }
-                librfnm_s->transport_status.boost_pp_rx = !librfnm_s->transport_status.boost_pp_rx;
+                s->transport_status.boost_pp_rx = !s->transport_status.boost_pp_rx;
             }
 
             r = libusb_bulk_transfer(lusb_handle, (((tpm.ep_id % 4) + 1) | LIBUSB_ENDPOINT_IN), (uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_SIZE, &transferred, 1000);
@@ -225,13 +225,13 @@ void librfnm::threadfn(size_t thread_index) {
 
             // RFNM_USB_RX_PACKET_ELEM_CNT * LIBRFNM_STREAM_FORMAT_CS16
 
-            if (librfnm_s->transport_status.rx_stream_format == LIBRFNM_STREAM_FORMAT_CS8) {
+            if (s->transport_status.rx_stream_format == LIBRFNM_STREAM_FORMAT_CS8) {
                 unpack_12_to_cs8(buf->buf, (uint8_t*)lrxbuf->buf, RFNM_USB_RX_PACKET_ELEM_CNT);
             }
-            else if (librfnm_s->transport_status.rx_stream_format == LIBRFNM_STREAM_FORMAT_CS16) {
+            else if (s->transport_status.rx_stream_format == LIBRFNM_STREAM_FORMAT_CS16) {
                 unpack_12_to_cs16(buf->buf, (uint8_t*)lrxbuf->buf, RFNM_USB_RX_PACKET_ELEM_CNT);
             }
-            else if (librfnm_s->transport_status.rx_stream_format == LIBRFNM_STREAM_FORMAT_CF32) {
+            else if (s->transport_status.rx_stream_format == LIBRFNM_STREAM_FORMAT_CF32) {
                 unpack_12_to_cf32(buf->buf, (uint8_t*)lrxbuf->buf, RFNM_USB_RX_PACKET_ELEM_CNT);
             }
             
@@ -280,12 +280,12 @@ void librfnm::threadfn(size_t thread_index) {
 
 
             libusb_device_handle* lusb_handle = usb_handle->primary;
-            if (0 && librfnm_s->transport_status.usb_boost_connected) {
+            if (0 && s->transport_status.usb_boost_connected) {
                 std::lock_guard<std::mutex> lockGuard(librfnm_s_transport_pp_mutex);
-                if (librfnm_s->transport_status.boost_pp_tx) {
+                if (s->transport_status.boost_pp_tx) {
                     lusb_handle = usb_handle->boost;
                 }
-                librfnm_s->transport_status.boost_pp_tx = !librfnm_s->transport_status.boost_pp_tx;
+                s->transport_status.boost_pp_tx = !s->transport_status.boost_pp_tx;
             }
 
             r = libusb_bulk_transfer(lusb_handle, (((tpm.ep_id % 4) + 1) | LIBUSB_ENDPOINT_OUT), (uint8_t*)ltxbuf, RFNM_USB_TX_PACKET_SIZE, &transferred, 1000);
@@ -322,7 +322,7 @@ read_dev_status:
             using std::chrono::duration;
             using std::chrono::milliseconds;
 
-            auto tlast = librfnm_s->last_dev_time;
+            auto tlast = s->last_dev_time;
             auto tnow = high_resolution_clock::now();
             auto ms_int = duration_cast<milliseconds>(tnow - tlast);
 
@@ -350,8 +350,8 @@ read_dev_status:
                         }
                     }
                     else {
-                        memcpy(&librfnm_s->dev_status, &dev_status, sizeof(struct rfnm_dev_status));
-                        librfnm_s->last_dev_time = high_resolution_clock::now();
+                        memcpy(&s->dev_status, &dev_status, sizeof(struct rfnm_dev_status));
+                        s->last_dev_time = high_resolution_clock::now();
                     }
 
 
@@ -486,7 +486,7 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
 
     librfnm_rx_s.qbuf_cnt = 0;
 
-    librfnm_s = (struct librfnm_status*)calloc(2, sizeof(struct librfnm_status));
+    s = (struct librfnm_status*)calloc(2, sizeof(struct librfnm_status));
     usb_handle = new _librfnm_usb_handle;
     
 
@@ -568,20 +568,20 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
             continue;
         }
 
-        librfnm_s->transport_status.theoretical_mbps = 3500;
+        s->transport_status.theoretical_mbps = 3500;
 
         usb_handle->boost = libusb_open_device_with_vid_pid(nullptr, RFNM_USB_VID, RFNM_USB_PID_BOOST);
         if (usb_handle->boost) {
             if (libusb_get_device_speed(libusb_get_device(usb_handle->boost)) >= LIBUSB_SPEED_SUPER) {
                 r = libusb_claim_interface(usb_handle->boost, 0);
                 if (r >= 0) {
-                    librfnm_s->transport_status.theoretical_mbps += 3500;
-                    librfnm_s->transport_status.usb_boost_connected = 1;
+                    s->transport_status.theoretical_mbps += 3500;
+                    s->transport_status.usb_boost_connected = 1;
                 }
             }
         }
 
-        spdlog::info("Max theoretical transport speed is {} Mbps", librfnm_s->transport_status.theoretical_mbps);
+        spdlog::info("Max theoretical transport speed is {} Mbps", s->transport_status.theoretical_mbps);
 
         r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST, RFNM_GET_SM_RESET, 0, NULL, 0, 500);
         if (r < 0) {
@@ -643,20 +643,20 @@ exit:
 
 #if 0
 
-    librfnm_s->rx.ch[0].enable = RFNM_CH_ON;
-    librfnm_s->rx.ch[0].freq = RFNM_MHZ_TO_HZ(2500);
-    librfnm_s->rx.ch[0].path = librfnm_s->rx.ch[0].path_preferred;
-    librfnm_s->rx.ch[0].samp_freq_div_n = 2;
+    s->rx.ch[0].enable = RFNM_CH_ON;
+    s->rx.ch[0].freq = RFNM_MHZ_TO_HZ(2500);
+    s->rx.ch[0].path = s->rx.ch[0].path_preferred;
+    s->rx.ch[0].samp_freq_div_n = 2;
 
-    librfnm_s->rx.ch[1].enable = RFNM_CH_ON;
-    librfnm_s->rx.ch[1].freq = RFNM_MHZ_TO_HZ(2500);
-    librfnm_s->rx.ch[1].path = librfnm_s->rx.ch[1].path_preferred;
-    librfnm_s->tx.ch[1].samp_freq_div_n = 2;
+    s->rx.ch[1].enable = RFNM_CH_ON;
+    s->rx.ch[1].freq = RFNM_MHZ_TO_HZ(2500);
+    s->rx.ch[1].path = s->rx.ch[1].path_preferred;
+    s->tx.ch[1].samp_freq_div_n = 2;
 
-    //librfnm_s->tx.ch[0].enable = RFNM_CH_ON;
-    //librfnm_s->tx.ch[0].freq = RFNM_MHZ_TO_HZ(2500);
-    //librfnm_s->tx.ch[0].path = librfnm_s->tx.ch[0].path_preferred;
-    //librfnm_s->tx.ch[0].samp_freq_div_n = 2;
+    //s->tx.ch[0].enable = RFNM_CH_ON;
+    //s->tx.ch[0].freq = RFNM_MHZ_TO_HZ(2500);
+    //s->tx.ch[0].path = s->tx.ch[0].path_preferred;
+    //s->tx.ch[0].samp_freq_div_n = 2;
      
     volatile rfnm_api_failcode fail;
     fail = librfnm_set(LIBRFNM_APPLY_CH0_RX /*| LIBRFNM_APPLY_CH0_TX  | LIBRFNM_APPLY_CH1_RX*/);
@@ -802,7 +802,7 @@ exit:
 #endif
 
     return;
-    //return (struct librfnm_status*)librfnm_s;
+    //return (struct librfnm_status*)s;
     //spdlog::info("librfnm_init ok");
 }
 
@@ -851,15 +851,15 @@ MSDLL rfnm_api_failcode librfnm::rx_stream(enum librfnm_stream_format format, in
     
     switch (format) {
     case LIBRFNM_STREAM_FORMAT_CS8:
-        librfnm_s->transport_status.rx_stream_format = format;
+        s->transport_status.rx_stream_format = format;
         *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
         break;
     case LIBRFNM_STREAM_FORMAT_CS16:
-        librfnm_s->transport_status.rx_stream_format = format;
+        s->transport_status.rx_stream_format = format;
         *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
         break;
     case LIBRFNM_STREAM_FORMAT_CF32:
-        librfnm_s->transport_status.rx_stream_format = format;
+        s->transport_status.rx_stream_format = format;
         *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
         break;
     default: 
@@ -882,15 +882,15 @@ MSDLL rfnm_api_failcode librfnm::tx_stream(enum librfnm_stream_format format, in
 
     switch (format) {
     case LIBRFNM_STREAM_FORMAT_CS8:
-        librfnm_s->transport_status.tx_stream_format = format;
+        s->transport_status.tx_stream_format = format;
         *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * 2;
         break;
     case LIBRFNM_STREAM_FORMAT_CS16:
-        librfnm_s->transport_status.tx_stream_format = format;
+        s->transport_status.tx_stream_format = format;
         *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * 4;
         break;
     case LIBRFNM_STREAM_FORMAT_CF32:
-        librfnm_s->transport_status.tx_stream_format = format;
+        s->transport_status.tx_stream_format = format;
         *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * 8;
         break;
     default:
@@ -922,7 +922,7 @@ MSDLL rfnm_api_failcode librfnm::tx_qbuf(struct librfnm_tx_buf* buf, uint32_t wa
 
     std::lock_guard<std::mutex> lockGuard1(librfnm_s_dev_status_mutex);
 
-    if (librfnm_tx_s.usb_cc - librfnm_s->dev_status.usb_dac_last_dqbuf > 100) {
+    if (librfnm_tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf > 100) {
         return RFNM_API_MIN_QBUF_QUEUE_FULL;
     }
 
@@ -941,7 +941,7 @@ MSDLL int librfnm::single_ch_id_bitmap_to_adc_id(uint8_t ch_ids) {
     int ch_id = 0;
     while (ch_id < 8) {
         if ((ch_ids & 0x1) == 1) {
-            return librfnm_s->rx.ch[ch_id].adc_id;
+            return s->rx.ch[ch_id].adc_id;
         }
         ch_id++;
         ch_ids = ch_ids >> 1;
@@ -1246,7 +1246,7 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_HWINFO failed");
             return RFNM_API_USB_FAIL;
         }
-        memcpy(&librfnm_s->hwinfo, &r_hwinfo, sizeof(struct rfnm_dev_hwinfo));
+        memcpy(&s->hwinfo, &r_hwinfo, sizeof(struct rfnm_dev_hwinfo));
 
         if (r_hwinfo.protocol_version != 1) {
             spdlog::error("RFNM_API_SW_UPGRADE_REQUIRED");
@@ -1263,7 +1263,7 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_TX failed");
             return RFNM_API_USB_FAIL;
         }
-        memcpy(&librfnm_s->tx, &r_chlist, sizeof(struct rfnm_dev_tx_ch_list));
+        memcpy(&s->tx, &r_chlist, sizeof(struct rfnm_dev_tx_ch_list));
     }
 
     if (type & LIBRFNM_REQ_RX) {
@@ -1275,7 +1275,7 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_RX failed");
             return RFNM_API_USB_FAIL;
         }
-        memcpy(&librfnm_s->rx, &r_chlist, sizeof(struct rfnm_dev_rx_ch_list));
+        memcpy(&s->rx, &r_chlist, sizeof(struct rfnm_dev_rx_ch_list));
     }
 
     if (type & LIBRFNM_REQ_DEV_STATUS) {
@@ -1286,7 +1286,7 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
             spdlog::error("libusb_control_transfer for RFNM_GET_DEV_STATUS failed {}", r);
             return RFNM_API_USB_FAIL;
         }
-        memcpy(&librfnm_s->dev_status, &dev_status, sizeof(struct rfnm_dev_status));
+        memcpy(&s->dev_status, &dev_status, sizeof(struct rfnm_dev_status));
     }
 
     return RFNM_API_OK;
@@ -1302,7 +1302,7 @@ MSDLL rfnm_api_failcode librfnm::set(uint16_t applies, bool confirm_execution, u
 
     if (applies_ch_tx) {
         struct rfnm_dev_tx_ch_list r_chlist;
-        memcpy(&r_chlist, &librfnm_s->tx, sizeof(struct rfnm_dev_tx_ch_list));
+        memcpy(&r_chlist, &s->tx, sizeof(struct rfnm_dev_tx_ch_list));
         r_chlist.apply = applies_ch_tx;
         r_chlist.cc = ++cc_tx;
 
@@ -1315,7 +1315,7 @@ MSDLL rfnm_api_failcode librfnm::set(uint16_t applies, bool confirm_execution, u
 
     if (applies_ch_rx) {
         struct rfnm_dev_rx_ch_list r_chlist;
-        memcpy(&r_chlist, &librfnm_s->rx, sizeof(struct rfnm_dev_rx_ch_list));
+        memcpy(&r_chlist, &s->rx, sizeof(struct rfnm_dev_rx_ch_list));
         r_chlist.apply = applies_ch_rx;
         r_chlist.cc = ++cc_rx;
 

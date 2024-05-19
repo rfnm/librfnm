@@ -249,7 +249,7 @@ public:
     //static int format_to_bytes_per_ele(enum librfnm_stream_format format);
 
 
-    struct librfnm_status* librfnm_s;
+    struct librfnm_status* s;
 
 private:
     void threadfn(size_t thread_index);
