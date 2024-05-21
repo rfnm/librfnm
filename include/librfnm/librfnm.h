@@ -77,8 +77,8 @@ enum librfnm_tx_latency_policy {
 
 #define LIBRFNM_THREAD_COUNT 16
 
-#define LIBRFNM_MIN_RX_BUFCNT 500
-#define LIBRFNM_RX_RECOMB_BUF_LEN (300)
+#define LIBRFNM_MIN_RX_BUFCNT 1000
+#define LIBRFNM_RX_RECOMB_BUF_LEN (400)
 
 
 #define LIBRFNM_CH0 (0x1 << 0)
