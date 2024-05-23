@@ -39,7 +39,7 @@ include(cmake/cpm-spdlog.cmake)
 # Library
 #
 
-add_library(librfnm SHARED)
+add_library(librfnm STATIC)
 
 #target_include_directories(librfnm PUBLIC "${CMAKE_SOURCE_DIR}/include")
 target_include_directories(librfnm ${SPDLOG_INCLUDES_LEVEL} PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
@@ -95,9 +95,9 @@ install(DIRECTORY include/librfnm DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 #  DESTINATION ${DEST_DIR}
 #)
 
-if(MSVC)
-  install(
-    FILES "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:$<TARGET_PDB_FILE:librfnm>>"
-    DESTINATION "bin"
-  )
-endif()
+#if(MSVC)
+#  install(
+#    FILES "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:$<TARGET_PDB_FILE:librfnm>>"
+#    DESTINATION "bin"
+#  )
+#endif()
