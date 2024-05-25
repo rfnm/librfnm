@@ -155,7 +155,7 @@ void librfnm::threadfn(size_t thread_index) {
                 std::unique_lock lk(tpm.cv_mutex);
                 // spurious wakeups are acceptable
                 tpm.cv.wait(lk,
-                    [] { return 1; });
+                    [this, thread_index] { return librfnm_thread_data[thread_index].rx_active || librfnm_thread_data[thread_index].tx_active; });
             }
         }
 
