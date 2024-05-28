@@ -820,9 +820,11 @@ MSDLL librfnm::~librfnm() {
 
     if (usb_handle) {
         if (usb_handle->primary) {
+            libusb_release_interface(usb_handle->primary, 0);
             libusb_close(usb_handle->primary);
         }
         if (usb_handle->boost) {
+            libusb_release_interface(usb_handle->boost, 0);
             libusb_close(usb_handle->boost);
         }
         delete usb_handle;
