@@ -155,7 +155,9 @@ void librfnm::threadfn(size_t thread_index) {
                 std::unique_lock lk(tpm.cv_mutex);
                 // spurious wakeups are acceptable
                 tpm.cv.wait(lk,
-                    [this, thread_index] { return librfnm_thread_data[thread_index].rx_active || librfnm_thread_data[thread_index].tx_active; });
+                    [this, thread_index] { return librfnm_thread_data[thread_index].rx_active ||
+                                                  librfnm_thread_data[thread_index].tx_active ||
+                                                  librfnm_thread_data[thread_index].shutdown_req; });
             }
         }
 
@@ -809,9 +811,11 @@ exit:
 MSDLL librfnm::~librfnm() {
 
     for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+        std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
         librfnm_thread_data[i].rx_active = 0;
         librfnm_thread_data[i].tx_active = 0;
         librfnm_thread_data[i].shutdown_req = 1;
+        librfnm_thread_data[i].cv.notify_one();
     }
 
     for (auto& i : librfnm_thread_c) {
@@ -820,9 +824,11 @@ MSDLL librfnm::~librfnm() {
 
     if (usb_handle) {
         if (usb_handle->primary) {
+            libusb_release_interface(usb_handle->primary, 0);
             libusb_close(usb_handle->primary);
         }
         if (usb_handle->boost) {
+            libusb_release_interface(usb_handle->boost, 0);
             libusb_close(usb_handle->boost);
         }
         delete usb_handle;
