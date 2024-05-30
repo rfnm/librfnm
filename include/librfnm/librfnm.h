@@ -9,7 +9,6 @@
 #include <math.h>
 #include <array>
 
-
 #pragma once
 
 #if defined(__GNUC__)
@@ -17,7 +16,7 @@
 #define MSDLL
 #elif defined(_MSC_VER)
 #define RFNM_PACKED_STRUCT( __Declaration__ ) __pragma(pack(push,1)) __Declaration__ __pragma(pack(pop))
-#define MSDLL __declspec(dllexport) 
+#define MSDLL __declspec(dllexport)
 #endif
 
 enum librfnm_transport {
@@ -74,12 +73,10 @@ enum librfnm_tx_latency_policy {
 
 #define RFNM_B_REQUEST (100)
 
-
 #define LIBRFNM_THREAD_COUNT 16
 
 #define LIBRFNM_MIN_RX_BUFCNT 1000
 #define LIBRFNM_RX_RECOMB_BUF_LEN (400)
-
 
 #define LIBRFNM_CH0 (0x1 << 0)
 #define LIBRFNM_CH1 (0x1 << 1)
@@ -108,14 +105,9 @@ enum librfnm_tx_latency_policy {
 #define LIBRFNM_APPLY_CH6_RX ((0x1 << 6) << 8)
 #define LIBRFNM_APPLY_CH7_RX ((0x1 << 7) << 8)
 
-
 #define RFNM_MHZ_TO_HZ(MHz) (MHz * 1000 * 1000ul)
 #define RFNM_HZ_TO_MHZ(Hz) (Hz / (1000ul * 1000ul))
 #define RFNM_HZ_TO_KHZ(Hz) (Hz / 1000ul)
-
-
-
-
 
 struct librfnm_transport_status {
     enum librfnm_transport transport;
@@ -136,12 +128,11 @@ struct librfnm_transport_status {
         struct rfnm_dev_rx_ch_list rx;
 
         struct rfnm_dev_status dev_status;
-        
+
         std::chrono::time_point<std::chrono::high_resolution_clock> last_dev_time;
         //std::mutex dev_status_mutex;
     };
 //);
-
 
 RFNM_PACKED_STRUCT(
     struct librfnm_rx_buf {
@@ -166,8 +157,6 @@ RFNM_PACKED_STRUCT(
 }
 );
 
-
-
 class librfnm_rx_buf_compare {
 public:
     bool operator()(struct librfnm_rx_buf* lra, struct librfnm_rx_buf* lrb) {
@@ -184,7 +173,6 @@ struct librfnm_rx_buf_s {
     uint8_t required_adc_id;
     uint64_t usb_cc[4];
     uint64_t qbuf_cnt;
-
 
     uint64_t usb_cc_benchmark[4];
     std::mutex benchmark_mutex;
@@ -211,16 +199,12 @@ struct librfnm_thread_data_s {
     std::mutex cv_mutex;
 };
 
-
 struct _librfnm_usb_handle;
-
-
 
 class librfnm {
 public:
     MSDLL explicit librfnm(enum librfnm_transport transport, std::string address = "", enum librfnm_debug_level dbg = LIBRFNM_DEBUG_NONE);
     MSDLL ~librfnm();
-public:
 
     MSDLL static std::vector<struct rfnm_dev_hwinfo> find(enum librfnm_transport transport, std::string address = "", int bind = 0);
 
@@ -229,7 +213,7 @@ public:
     MSDLL rfnm_api_failcode set(uint16_t applies, bool confirm_execution = true, uint32_t wait_for_ms = 1000);
 
     MSDLL rfnm_api_failcode rx_stream(enum librfnm_stream_format format, int* bufsize);
-    
+
     MSDLL rfnm_api_failcode rx_qbuf(struct librfnm_rx_buf* buf);
 
     MSDLL rfnm_api_failcode rx_dqbuf(struct librfnm_rx_buf** buf, uint8_t ch_ids = 0, uint32_t wait_for_ms = 20);
@@ -244,48 +228,30 @@ public:
 
     MSDLL static std::string rf_path_to_string(enum rfnm_rf_path path);
 
-
-
     //static int format_to_bytes_per_ele(enum librfnm_stream_format format);
-
 
     struct librfnm_status* s;
 
 private:
     void threadfn(size_t thread_index);
 
-private:
-    
+    MSDLL bool unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt);
+    MSDLL bool unpack_12_to_cf32(uint8_t* dest, uint8_t* src, size_t sample_cnt);
+    MSDLL bool unpack_12_to_cs8(uint8_t* dest, uint8_t* src, size_t sample_cnt);
+    MSDLL void pack_cs16_to_12(uint8_t* dest, uint8_t* src8, int sample_cnt);
 
+    MSDLL int single_ch_id_bitmap_to_adc_id(uint8_t ch_ids);
+    MSDLL void dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock);
+    MSDLL int dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock);
 
     _librfnm_usb_handle *usb_handle;
-    //libusb_device_handle* usb_handle->primary{};
-    //libusb_device_handle* usb_handle->boost{};
-
-
 
     std::mutex librfnm_s_dev_status_mutex;
-
     std::mutex librfnm_s_transport_pp_mutex;
-
-
-
 
     struct librfnm_rx_buf_s librfnm_rx_s;
     struct librfnm_tx_buf_s librfnm_tx_s;
     struct librfnm_thread_data_s librfnm_thread_data[LIBRFNM_THREAD_COUNT];
 
     std::array<std::thread, LIBRFNM_THREAD_COUNT> librfnm_thread_c{};
-
-
-    MSDLL bool unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt);
-    MSDLL bool unpack_12_to_cf32(uint8_t* dest, uint8_t* src, size_t sample_cnt);
-    MSDLL bool unpack_12_to_cs8(uint8_t* dest, uint8_t* src, size_t sample_cnt);
-    MSDLL void pack_cs16_to_12(uint8_t* dest, uint8_t* src8, int sample_cnt);
-
-
-    MSDLL int single_ch_id_bitmap_to_adc_id(uint8_t ch_ids);
-    MSDLL void dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock);
-    MSDLL int dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock);
-
 };
