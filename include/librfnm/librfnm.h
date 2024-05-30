@@ -230,7 +230,7 @@ public:
 
     //static int format_to_bytes_per_ele(enum librfnm_stream_format format);
 
-    struct librfnm_status* s;
+    struct librfnm_status* s = nullptr;
 
 private:
     void threadfn(size_t thread_index);
@@ -244,7 +244,7 @@ private:
     MSDLL void dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock);
     MSDLL int dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock);
 
-    _librfnm_usb_handle *usb_handle;
+    _librfnm_usb_handle *usb_handle = nullptr;
 
     std::mutex librfnm_s_dev_status_mutex;
     std::mutex librfnm_s_transport_pp_mutex;

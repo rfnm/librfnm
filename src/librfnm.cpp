@@ -362,7 +362,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
         }
 
         if (address.length()) {
-            auto* sn = new uint8_t[10]();
+            uint8_t sn[9];
             if (libusb_get_string_descriptor_ascii(thandle, desc.iSerialNumber, sn, 9) >= 0) {
                 sn[8] = '\0';
                 if(strcmp((const char*)sn, address.c_str())) {
@@ -421,9 +421,8 @@ exit:
 MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, enum librfnm_debug_level dbg) {
     librfnm_rx_s.qbuf_cnt = 0;
 
-    s = (struct librfnm_status*)calloc(2, sizeof(struct librfnm_status));
+    s = (struct librfnm_status*)calloc(1, sizeof(struct librfnm_status));
     usb_handle = new _librfnm_usb_handle;
-    
 
     if (transport != LIBRFNM_TRANSPORT_USB) {
         spdlog::error("Transport not supported");
@@ -473,7 +472,7 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
         }
 
         if (address.length()) {
-            auto* sn = new uint8_t[10]();
+            uint8_t sn[9];
             if (libusb_get_string_descriptor_ascii(usb_handle->primary, desc.iSerialNumber, sn, 9) >= 0) {
                 sn[8] = '\0';
                 if (strcmp((const char*)sn, address.c_str())) {
@@ -563,6 +562,10 @@ MSDLL librfnm::~librfnm() {
 
     for (auto& i : librfnm_thread_c) {
         i.join();
+    }
+
+    if (s) {
+        free(s);
     }
 
     if (usb_handle) {
