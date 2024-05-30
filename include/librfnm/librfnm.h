@@ -249,9 +249,9 @@ private:
     std::mutex librfnm_s_dev_status_mutex;
     std::mutex librfnm_s_transport_pp_mutex;
 
-    struct librfnm_rx_buf_s librfnm_rx_s;
-    struct librfnm_tx_buf_s librfnm_tx_s;
-    struct librfnm_thread_data_s librfnm_thread_data[LIBRFNM_THREAD_COUNT];
+    struct librfnm_rx_buf_s librfnm_rx_s = {};
+    struct librfnm_tx_buf_s librfnm_tx_s = {};
+    struct librfnm_thread_data_s librfnm_thread_data[LIBRFNM_THREAD_COUNT] = {};
 
     std::array<std::thread, LIBRFNM_THREAD_COUNT> librfnm_thread_c{};
 };
