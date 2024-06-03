@@ -3,8 +3,6 @@
 
 #include <cstdint>
 
-
-
 #if defined(__GNUC__)
 #define RFNM_PACKED_STRUCT( __Declaration__ ) __Declaration__ __attribute__((__packed__))
 #elif defined(_MSC_VER)
@@ -51,9 +49,6 @@ enum rfnm_ch_enable {
 	RFNM_CH_ON,
 	RFNM_CH_ON_TDD
 };
-
-
-
 
 enum rfnm_ch_stream {
 	RFNM_CH_STREAM_AUTO,
@@ -121,7 +116,6 @@ RFNM_PACKED_STRUCT(
 	enum rfnm_ch_data_type data_type;
 }
 );
-
 
 RFNM_PACKED_STRUCT(
 	struct rfnm_dev_hwinfo_bit {
@@ -239,13 +233,6 @@ typedef enum {
 	//RFNM_API_DQBUF_UNDERRUN = 7,
 } rfnm_api_failcode;
 
-
-
-
-
-
-
-
 #define RFNM_RX_USB_BUF_MULTI 128
 #define RFNM_RX_USB_BUF_SIZE 128
 
@@ -259,7 +246,6 @@ typedef enum {
 #define RFNM_LA9310_DMA_TX_SIZE		(512)
 #define LA_TX_BASE_BUFSIZE (4*RFNM_LA9310_DMA_TX_SIZE)
 #define LA_TX_BASE_BUFSIZE_12 ((LA_TX_BASE_BUFSIZE * 3) / 4)
-
 
 RFNM_PACKED_STRUCT(
 	struct rfnm_rx_usb_buf {
@@ -296,7 +282,5 @@ RFNM_PACKED_STRUCT(
 #define RFNM_USB_RX_PACKET_HEAD_SIZE (RFNM_USB_RX_PACKET_SIZE - (LA_RX_BASE_BUFSIZE_12 * RFNM_RX_USB_BUF_MULTI))
 #define RFNM_USB_RX_PACKET_DATA_SIZE (RFNM_USB_RX_PACKET_SIZE - RFNM_USB_RX_PACKET_HEAD_SIZE)
 #define RFNM_USB_RX_PACKET_ELEM_CNT (RFNM_USB_RX_PACKET_DATA_SIZE / 3)
-
-
 
 #endif
