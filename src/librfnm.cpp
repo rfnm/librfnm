@@ -634,6 +634,17 @@ MSDLL rfnm_api_failcode librfnm::rx_stream(enum librfnm_stream_format format, in
     return ret;
 }
 
+MSDLL rfnm_api_failcode librfnm::rx_stream_stop() {
+    rfnm_api_failcode ret = RFNM_API_OK;
+
+    for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+        std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
+        librfnm_thread_data[i].rx_active = 0;
+    }
+
+    return ret;
+}
+
 MSDLL rfnm_api_failcode librfnm::tx_stream(enum librfnm_stream_format format, int* bufsize, enum librfnm_tx_latency_policy policy) {
     rfnm_api_failcode ret = RFNM_API_OK;
 
@@ -658,6 +669,17 @@ MSDLL rfnm_api_failcode librfnm::tx_stream(enum librfnm_stream_format format, in
         std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
         librfnm_thread_data[i].tx_active = 1;
         librfnm_thread_data[i].cv.notify_one();
+    }
+
+    return ret;
+}
+
+MSDLL rfnm_api_failcode librfnm::tx_stream_stop() {
+    rfnm_api_failcode ret = RFNM_API_OK;
+
+    for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+        std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
+        librfnm_thread_data[i].tx_active = 0;
     }
 
     return ret;

@@ -214,11 +214,15 @@ public:
 
     MSDLL rfnm_api_failcode rx_stream(enum librfnm_stream_format format, int* bufsize);
 
+    MSDLL rfnm_api_failcode rx_stream_stop();
+
     MSDLL rfnm_api_failcode rx_qbuf(struct librfnm_rx_buf* buf);
 
     MSDLL rfnm_api_failcode rx_dqbuf(struct librfnm_rx_buf** buf, uint8_t ch_ids = 0, uint32_t wait_for_ms = 20);
 
     MSDLL rfnm_api_failcode tx_stream(enum librfnm_stream_format format, int* bufsize, enum librfnm_tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
+
+    MSDLL rfnm_api_failcode tx_stream_stop();
 
     MSDLL rfnm_api_failcode tx_qbuf(struct librfnm_tx_buf* buf, uint32_t wait_for_ms = 20);
 
