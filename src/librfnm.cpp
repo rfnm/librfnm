@@ -703,63 +703,13 @@ MSDLL void librfnm::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
     }
     librfnm_rx_s.in_mutex.lock();
 
-#if 1
     if (librfnm_rx_s.out[adc_id].size()) {
-
-        int size = librfnm_rx_s.out[adc_id].size();
-
-        for (int i = 0; i < /*size / 2*/1; i++) {
-
-            buf = librfnm_rx_s.out[adc_id].top();
-            librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc + 1;
-            librfnm_rx_s.in.push(buf);
-            librfnm_rx_s.out[adc_id].pop();
-
-            //spdlog::info("new cc {}", librfnm_rx_s.usb_cc[adc_id]);
-
-        }
-    }
-#else
-    if (librfnm_rx_s.out[adc_id].size()) {
-
         buf = librfnm_rx_s.out[adc_id].top();
         librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc + 1;
         librfnm_rx_s.in.push(buf);
         librfnm_rx_s.out[adc_id].pop();
-
-        spdlog::info("new cc {}", librfnm_rx_s.usb_cc[adc_id]);
-
-        int drop_cnt = 0;
-        int save_cnt = 0;
-
-        std::priority_queue<struct librfnm_rx_buf*, std::vector<struct librfnm_rx_buf*>, librfnm_rx_buf_compare> tq;
-
-        while (librfnm_rx_s.out[adc_id].size()) {
-            buf = librfnm_rx_s.out[adc_id].top();
-            if (buf->usb_cc < librfnm_rx_s.usb_cc[adc_id]) {
-                librfnm_rx_s.in.push(buf);
-
-                drop_cnt++;
-            }
-            else {
-                tq.push(buf);
-                //     spdlog::info("saving {}", buf->usb_cc);
-                save_cnt++;
-            }
-
-
-            librfnm_rx_s.out[adc_id].pop();
-        }
-
-        spdlog::info("dropping {} saving {}", drop_cnt, save_cnt);
-
-        while (tq.size()) {
-            buf = tq.top();
-            librfnm_rx_s.out[adc_id].push(buf);
-            tq.pop();
-        }
     }
-#endif
+
     //spdlog::info("new cc is {}", librfnm_rx_s.usb_cc[adc_id]);
 
     librfnm_rx_s.in_mutex.unlock();
@@ -770,7 +720,7 @@ MSDLL void librfnm::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
 
 MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     struct librfnm_rx_buf* buf;
-    int queue_size = 0;
+    size_t queue_size;
 
     if (acquire_lock) {
         librfnm_rx_s.out_mutex.lock();
@@ -784,7 +734,19 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         return 0;
     }
 
-    buf = librfnm_rx_s.out[librfnm_rx_s.required_adc_id].top();
+    do {
+        buf = librfnm_rx_s.out[adc_id].top();
+        if (buf->usb_cc < librfnm_rx_s.usb_cc[adc_id]) {
+            std::lock_guard<std::mutex> lockGuard(librfnm_rx_s.in_mutex);
+            librfnm_rx_s.out[adc_id].pop();
+            librfnm_rx_s.in.push(buf);
+            queue_size--;
+            spdlog::info("stale cc {} discarded from adc {}", buf->usb_cc, adc_id);
+        }
+        else {
+            break;
+        }
+    } while (queue_size > 1);
 
     if (acquire_lock) {
         librfnm_rx_s.out_mutex.unlock();
@@ -794,10 +756,9 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         return 1;
     }
     else {
-        //if (queue_size > LIBRFNM_RX_RECOMB_BUF_LEN) {
-        if (acquire_lock && queue_size > LIBRFNM_RX_RECOMB_BUF_LEN) {
-            spdlog::info("cc {} overwritten at queue size {} adc {}", librfnm_rx_s.usb_cc[librfnm_rx_s.required_adc_id],
-                    queue_size, librfnm_rx_s.required_adc_id);
+        if (queue_size > LIBRFNM_RX_RECOMB_BUF_LEN) {
+            spdlog::info("cc {} overwritten at queue size {} adc {}", librfnm_rx_s.usb_cc[adc_id],
+                    queue_size, adc_id);
             dqbuf_overwrite_cc(adc_id, acquire_lock);
         }
         return 0;
@@ -863,10 +824,8 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
         }
 
         if (!dqbuf_is_cc_continuous(librfnm_rx_s.required_adc_id, 1)) {
-            spdlog::info("cc timeout {}", librfnm_rx_s.usb_cc[librfnm_rx_s.required_adc_id]);
-
-            if (librfnm_rx_s.out[librfnm_rx_s.required_adc_id].size()) {
-                dqbuf_overwrite_cc(librfnm_rx_s.required_adc_id, 1);
+            if (wait_for_ms >= 10) {
+                spdlog::info("cc timeout {}", librfnm_rx_s.usb_cc[librfnm_rx_s.required_adc_id]);
             }
 
             return RFNM_API_DQBUF_NO_DATA;
