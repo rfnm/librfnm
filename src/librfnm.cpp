@@ -322,6 +322,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
     int dev_cnt = 0;
     int r;
     std::vector<struct rfnm_dev_hwinfo> found = {};
+    libusb_device** devs = NULL;
 
 #if LIBUSB_API_VERSION >= 0x0100010A
     r = libusb_init_context(nullptr, nullptr, 0);
@@ -332,8 +333,6 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
         spdlog::error("RFNMDevice::activateStream() -> failed to initialize libusb");
         goto exit;
     }
-
-    libusb_device** devs;
 
     dev_cnt = libusb_get_device_list(NULL, &devs);
     if (dev_cnt < 0) {
@@ -366,29 +365,25 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
                 sn[8] = '\0';
                 if(strcmp((const char*)sn, address.c_str())) {
                     spdlog::info("This serial {} doesn't match the requested {}", (const char*)sn, address);
-                    libusb_close(thandle);
-                    continue;
+                    goto next;
                 }
             }
             else {
                 spdlog::error("Couldn't read serial descr");
-                libusb_close(thandle);
-                continue;
+                goto next;
             }
         }
 
         if (libusb_get_device_speed(libusb_get_device(thandle)) < LIBUSB_SPEED_SUPER) {
             spdlog::error("You are connected using USB 2.0 (480 Mbps), however USB 3.0 (5000 Mbps) is required. "
                     "Please make sure that the cable and port you are using can work with USB 3.0 SuperSpeed");
-            libusb_close(thandle);
-            continue;
+            goto next;
         }
 
         r = libusb_claim_interface(thandle, 0);
         if (r < 0) {
             spdlog::error("Found RFNM device, but couldn't claim the interface, {}, {}", r, libusb_strerror(r));
-            libusb_close(thandle);
-            continue;
+            goto next;
         }
 
         struct rfnm_dev_hwinfo r_hwinfo;
@@ -397,16 +392,17 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
                 RFNM_GET_DEV_HWINFO, 0, (unsigned char*)&r_hwinfo, sizeof(struct rfnm_dev_hwinfo), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_HWINFO failed");
-            goto exit;
+            goto next;
         }
 
         if (r_hwinfo.protocol_version != 1) {
             spdlog::error("RFNM_API_SW_UPGRADE_REQUIRED");
-            goto exit;
+            goto next;
         }
 
         found.push_back(r_hwinfo);
 
+next:
         libusb_release_interface(thandle, 0);
         libusb_close(thandle);
     }
