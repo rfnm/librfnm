@@ -321,7 +321,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
     int cnt = 0;
     int dev_cnt = 0;
     int r;
-    std::vector<struct rfnm_dev_hwinfo> found;
+    std::vector<struct rfnm_dev_hwinfo> found = {};
 
 #if LIBUSB_API_VERSION >= 0x0100010A
     r = libusb_init_context(nullptr, nullptr, 0);
@@ -330,7 +330,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
 #endif
     if (r < 0) {
         spdlog::error("RFNMDevice::activateStream() -> failed to initialize libusb");
-        return {};
+        goto exit;
     }
 
     libusb_device** devs;
@@ -338,8 +338,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
     dev_cnt = libusb_get_device_list(NULL, &devs);
     if (dev_cnt < 0) {
         spdlog::error("failed to get list of usb devices");
-        libusb_exit(NULL);
-        return {};
+        goto exit;
     }
 
     for (int d = 0; d < dev_cnt; d++) {
@@ -398,12 +397,12 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
                 RFNM_GET_DEV_HWINFO, 0, (unsigned char*)&r_hwinfo, sizeof(struct rfnm_dev_hwinfo), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_HWINFO failed");
-            return {};
+            goto exit;
         }
 
         if (r_hwinfo.protocol_version != 1) {
             spdlog::error("RFNM_API_SW_UPGRADE_REQUIRED");
-            return {};
+            goto exit;
         }
 
         found.push_back(r_hwinfo);
@@ -421,13 +420,13 @@ exit:
 MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, enum librfnm_debug_level dbg) {
     librfnm_rx_s.qbuf_cnt = 0;
 
-    s = (struct librfnm_status*)calloc(1, sizeof(struct librfnm_status));
-    usb_handle = new _librfnm_usb_handle;
-
     if (transport != LIBRFNM_TRANSPORT_USB) {
         spdlog::error("Transport not supported");
         return;
     }
+
+    s = (struct librfnm_status*)calloc(1, sizeof(struct librfnm_status));
+    usb_handle = new _librfnm_usb_handle;
 
     int cnt = 0;
     int dev_cnt = 0;
@@ -521,11 +520,11 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
                 RFNM_B_REQUEST, RFNM_GET_SM_RESET, 0, NULL, 0, 500);
         if (r < 0) {
             spdlog::error("Couldn't reset state machine");
-            return;
+            goto exit;
         }
 
         if (get(LIBRFNM_REQ_ALL)) {
-            return;
+            goto exit;
         }
 
         libusb_free_device_list(devs, 1);
@@ -541,7 +540,7 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
             librfnm_thread_c[i] = std::thread(&librfnm::threadfn, this, i);
         }
 
-        return;
+        goto exit;
     }
 
 exit:
