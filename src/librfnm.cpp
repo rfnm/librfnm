@@ -741,11 +741,12 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     do {
         buf = librfnm_rx_s.out[adc_id].top();
         if (buf->usb_cc < librfnm_rx_s.usb_cc[adc_id]) {
+            uint64_t usb_cc = buf->usb_cc;
             std::lock_guard<std::mutex> lockGuard(librfnm_rx_s.in_mutex);
             librfnm_rx_s.out[adc_id].pop();
             librfnm_rx_s.in.push(buf);
             queue_size--;
-            spdlog::info("stale cc {} discarded from adc {}", buf->usb_cc, adc_id);
+            spdlog::info("stale cc {} discarded from adc {}", usb_cc, adc_id);
         }
         else {
             break;
