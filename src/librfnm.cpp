@@ -120,8 +120,8 @@ MSDLL void librfnm::pack_cs16_to_12(uint8_t* dest, uint8_t* src8, int sample_cnt
 }
 
 void librfnm::threadfn(size_t thread_index) {
-    struct rfnm_rx_usb_buf* lrxbuf = (struct rfnm_rx_usb_buf*)malloc(RFNM_USB_RX_PACKET_SIZE);
-    struct rfnm_tx_usb_buf* ltxbuf = (struct rfnm_tx_usb_buf*)malloc(RFNM_USB_TX_PACKET_SIZE);
+    struct rfnm_rx_usb_buf* lrxbuf = new rfnm_rx_usb_buf();
+    struct rfnm_tx_usb_buf* ltxbuf = new rfnm_tx_usb_buf();
     int transferred;
     auto& tpm = librfnm_thread_data[thread_index];
     int r;
@@ -308,8 +308,8 @@ read_dev_status:
         }
     }
 
-    free(lrxbuf);
-    free(ltxbuf);
+    delete lrxbuf;
+    delete ltxbuf;
 }
 
 MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport transport, std::string address, int bind) {
@@ -421,7 +421,7 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
         throw std::runtime_error("Transport not supported");
     }
 
-    s = (struct librfnm_status*)calloc(1, sizeof(struct librfnm_status));
+    s = new struct librfnm_status();
     usb_handle = new _librfnm_usb_handle;
 
     int cnt = 0;
@@ -549,7 +549,7 @@ next:
 error:
     libusb_free_device_list(devs, 1);
     libusb_exit(NULL);
-    free(s);
+    delete s;
     delete usb_handle;
     throw std::runtime_error("RFNM initialization failure");
 }
@@ -567,7 +567,7 @@ MSDLL librfnm::~librfnm() {
         i.join();
     }
 
-    free(s);
+    delete s;
 
     if (usb_handle->primary) {
         libusb_release_interface(usb_handle->primary, 0);
