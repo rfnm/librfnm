@@ -800,8 +800,6 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
         required_adc_id = single_ch_id_bitmap_to_adc_id(ch_ids);
     }
     else {
-        static int last_dqbuf_ch = 0;
-
         do {
             uint8_t mask = (1 << last_dqbuf_ch);
             required_adc_id = single_ch_id_bitmap_to_adc_id(ch_ids & mask);
@@ -985,9 +983,6 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
 
 MSDLL rfnm_api_failcode librfnm::set(uint16_t applies, bool confirm_execution, uint32_t wait_for_ms) {
     int r;
-    volatile static uint32_t cc_tx = 0;
-    volatile static uint32_t cc_rx = 0;
-
     uint8_t applies_ch_tx = applies & 0xff;
     uint8_t applies_ch_rx = (applies & 0xff00) >> 8;
 
