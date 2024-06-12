@@ -704,10 +704,13 @@ MSDLL void librfnm::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
     librfnm_rx_s.in_mutex.lock();
 
     if (librfnm_rx_s.out[adc_id].size()) {
-        buf = librfnm_rx_s.out[adc_id].top();
-        librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc + 1;
-        librfnm_rx_s.in.push(buf);
-        librfnm_rx_s.out[adc_id].pop();
+        int size = librfnm_rx_s.out[adc_id].size();
+        for (int i = 0; i < size / 2; i++) {
+            buf = librfnm_rx_s.out[adc_id].top();
+            librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc + 1;
+            librfnm_rx_s.in.push(buf);
+            librfnm_rx_s.out[adc_id].pop();
+        }
     }
 
     //spdlog::info("new cc is {}", librfnm_rx_s.usb_cc[adc_id]);
