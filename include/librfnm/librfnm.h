@@ -255,4 +255,8 @@ private:
     struct librfnm_thread_data_s librfnm_thread_data[LIBRFNM_THREAD_COUNT] = {};
 
     std::array<std::thread, LIBRFNM_THREAD_COUNT> librfnm_thread_c{};
+
+    uint32_t cc_tx = 0;
+    uint32_t cc_rx = 0;
+    int last_dqbuf_ch = 0;
 };

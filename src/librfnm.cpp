@@ -120,8 +120,8 @@ MSDLL void librfnm::pack_cs16_to_12(uint8_t* dest, uint8_t* src8, int sample_cnt
 }
 
 void librfnm::threadfn(size_t thread_index) {
-    struct rfnm_rx_usb_buf* lrxbuf = (struct rfnm_rx_usb_buf*)malloc(RFNM_USB_RX_PACKET_SIZE);
-    struct rfnm_tx_usb_buf* ltxbuf = (struct rfnm_tx_usb_buf*)malloc(RFNM_USB_TX_PACKET_SIZE);
+    struct rfnm_rx_usb_buf* lrxbuf = new rfnm_rx_usb_buf();
+    struct rfnm_tx_usb_buf* ltxbuf = new rfnm_tx_usb_buf();
     int transferred;
     auto& tpm = librfnm_thread_data[thread_index];
     int r;
@@ -308,8 +308,8 @@ read_dev_status:
         }
     }
 
-    free(lrxbuf);
-    free(ltxbuf);
+    delete lrxbuf;
+    delete ltxbuf;
 }
 
 MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport transport, std::string address, int bind) {
@@ -322,6 +322,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
     int dev_cnt = 0;
     int r;
     std::vector<struct rfnm_dev_hwinfo> found = {};
+    libusb_device** devs = NULL;
 
 #if LIBUSB_API_VERSION >= 0x0100010A
     r = libusb_init_context(nullptr, nullptr, 0);
@@ -332,8 +333,6 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
         spdlog::error("RFNMDevice::activateStream() -> failed to initialize libusb");
         goto exit;
     }
-
-    libusb_device** devs;
 
     dev_cnt = libusb_get_device_list(NULL, &devs);
     if (dev_cnt < 0) {
@@ -366,29 +365,25 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
                 sn[8] = '\0';
                 if(strcmp((const char*)sn, address.c_str())) {
                     spdlog::info("This serial {} doesn't match the requested {}", (const char*)sn, address);
-                    libusb_close(thandle);
-                    continue;
+                    goto next;
                 }
             }
             else {
                 spdlog::error("Couldn't read serial descr");
-                libusb_close(thandle);
-                continue;
+                goto next;
             }
         }
 
         if (libusb_get_device_speed(libusb_get_device(thandle)) < LIBUSB_SPEED_SUPER) {
             spdlog::error("You are connected using USB 2.0 (480 Mbps), however USB 3.0 (5000 Mbps) is required. "
                     "Please make sure that the cable and port you are using can work with USB 3.0 SuperSpeed");
-            libusb_close(thandle);
-            continue;
+            goto next;
         }
 
         r = libusb_claim_interface(thandle, 0);
         if (r < 0) {
             spdlog::error("Found RFNM device, but couldn't claim the interface, {}, {}", r, libusb_strerror(r));
-            libusb_close(thandle);
-            continue;
+            goto next;
         }
 
         struct rfnm_dev_hwinfo r_hwinfo;
@@ -397,16 +392,17 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
                 RFNM_GET_DEV_HWINFO, 0, (unsigned char*)&r_hwinfo, sizeof(struct rfnm_dev_hwinfo), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_HWINFO failed");
-            goto exit;
+            goto next;
         }
 
         if (r_hwinfo.protocol_version != 1) {
             spdlog::error("RFNM_API_SW_UPGRADE_REQUIRED");
-            goto exit;
+            goto next;
         }
 
         found.push_back(r_hwinfo);
 
+next:
         libusb_release_interface(thandle, 0);
         libusb_close(thandle);
     }
@@ -422,16 +418,17 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
 
     if (transport != LIBRFNM_TRANSPORT_USB) {
         spdlog::error("Transport not supported");
-        return;
+        throw std::runtime_error("Transport not supported");
     }
 
-    s = (struct librfnm_status*)calloc(1, sizeof(struct librfnm_status));
+    s = new struct librfnm_status();
     usb_handle = new _librfnm_usb_handle;
 
     int cnt = 0;
     int dev_cnt = 0;
     int r;
     std::vector<struct rfnm_dev_hwinfo> found;
+    libusb_device** devs = NULL;
 
 #if LIBUSB_API_VERSION >= 0x0100010A
     r = libusb_init_context(nullptr, nullptr, 0);
@@ -440,16 +437,13 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
 #endif
     if (r < 0) {
         spdlog::error("RFNMDevice::activateStream() -> failed to initialize libusb");
-        return;
+        goto error;
     }
-
-    libusb_device** devs;
 
     dev_cnt = libusb_get_device_list(NULL, &devs);
     if (dev_cnt < 0) {
         spdlog::error("failed to get list of usb devices");
-        libusb_exit(NULL);
-        return;
+        goto error;
     }
 
     for (int d = 0; d < dev_cnt; d++) {
@@ -457,17 +451,17 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
         int r = libusb_get_device_descriptor(devs[d], &desc);
         if (r < 0) {
             spdlog::error("failed to get usb dev descr");
-            continue;
+            goto next;
         }
 
         if (desc.idVendor != RFNM_USB_VID || desc.idProduct != RFNM_USB_PID) {
-            continue;
+            goto next;
         }
 
         r = libusb_open(devs[d], &usb_handle->primary);
         if (r) {
             spdlog::error("Found RFNM device, but couldn't open it {}", r);
-            continue;
+            goto next;
         }
 
         if (address.length()) {
@@ -476,29 +470,25 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
                 sn[8] = '\0';
                 if (strcmp((const char*)sn, address.c_str())) {
                     spdlog::info("This serial {} doesn't match the requested {}", (const char*)sn, address);
-                    libusb_close(usb_handle->primary);
-                    continue;
+                    goto next;
                 }
             }
             else {
                 spdlog::error("Couldn't read serial descr");
-                libusb_close(usb_handle->primary);
-                continue;
+                goto next;
             }
         }
 
         if (libusb_get_device_speed(libusb_get_device(usb_handle->primary)) < LIBUSB_SPEED_SUPER) {
             spdlog::error("You are connected using USB 2.0 (480 Mbps), however USB 3.0 (5000 Mbps) is required. "
                     "Please make sure that the cable and port you are using can work with USB 3.0 SuperSpeed");
-            libusb_close(usb_handle->primary);
-            continue;
+            goto next;
         }
 
         r = libusb_claim_interface(usb_handle->primary, 0);
         if (r < 0) {
             spdlog::error("Found RFNM device, but couldn't claim the interface, {}, {}", r, libusb_strerror(r));
-            libusb_close(usb_handle->primary);
-            continue;
+            goto next;
         }
 
         s->transport_status.theoretical_mbps = 3500;
@@ -520,11 +510,11 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
                 RFNM_B_REQUEST, RFNM_GET_SM_RESET, 0, NULL, 0, 500);
         if (r < 0) {
             spdlog::error("Couldn't reset state machine");
-            goto exit;
+            goto next;
         }
 
         if (get(LIBRFNM_REQ_ALL)) {
-            goto exit;
+            goto next;
         }
 
         libusb_free_device_list(devs, 1);
@@ -540,17 +530,31 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
             librfnm_thread_c[i] = std::thread(&librfnm::threadfn, this, i);
         }
 
-        goto exit;
+        // Success
+        return;
+
+next:
+        if (usb_handle->primary) {
+            libusb_release_interface(usb_handle->primary, 0);
+            libusb_close(usb_handle->primary);
+            usb_handle->primary = NULL;
+        }
+        if (usb_handle->boost) {
+            libusb_release_interface(usb_handle->boost, 0);
+            libusb_close(usb_handle->boost);
+            usb_handle->boost = NULL;
+        }
     }
 
-exit:
+error:
     libusb_free_device_list(devs, 1);
     libusb_exit(NULL);
-    return;
+    delete s;
+    delete usb_handle;
+    throw std::runtime_error("RFNM initialization failure");
 }
 
 MSDLL librfnm::~librfnm() {
-
     for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
         librfnm_thread_data[i].rx_active = 0;
@@ -563,21 +567,19 @@ MSDLL librfnm::~librfnm() {
         i.join();
     }
 
-    if (s) {
-        free(s);
+    delete s;
+
+    if (usb_handle->primary) {
+        libusb_release_interface(usb_handle->primary, 0);
+        libusb_close(usb_handle->primary);
+    }
+    if (usb_handle->boost) {
+        libusb_release_interface(usb_handle->boost, 0);
+        libusb_close(usb_handle->boost);
     }
 
-    if (usb_handle) {
-        if (usb_handle->primary) {
-            libusb_release_interface(usb_handle->primary, 0);
-            libusb_close(usb_handle->primary);
-        }
-        if (usb_handle->boost) {
-            libusb_release_interface(usb_handle->boost, 0);
-            libusb_close(usb_handle->boost);
-        }
-        delete usb_handle;
-    }
+    delete usb_handle;
+    libusb_exit(NULL);
 }
 
 #if 0
@@ -739,11 +741,12 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     do {
         buf = librfnm_rx_s.out[adc_id].top();
         if (buf->usb_cc < librfnm_rx_s.usb_cc[adc_id]) {
+            uint64_t usb_cc = buf->usb_cc;
             std::lock_guard<std::mutex> lockGuard(librfnm_rx_s.in_mutex);
             librfnm_rx_s.out[adc_id].pop();
             librfnm_rx_s.in.push(buf);
             queue_size--;
-            spdlog::info("stale cc {} discarded from adc {}", buf->usb_cc, adc_id);
+            spdlog::info("stale cc {} discarded from adc {}", usb_cc, adc_id);
         }
         else {
             break;
@@ -798,8 +801,6 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
         required_adc_id = single_ch_id_bitmap_to_adc_id(ch_ids);
     }
     else {
-        static int last_dqbuf_ch = 0;
-
         do {
             uint8_t mask = (1 << last_dqbuf_ch);
             required_adc_id = single_ch_id_bitmap_to_adc_id(ch_ids & mask);
@@ -983,9 +984,6 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
 
 MSDLL rfnm_api_failcode librfnm::set(uint16_t applies, bool confirm_execution, uint32_t wait_for_ms) {
     int r;
-    volatile static uint32_t cc_tx = 0;
-    volatile static uint32_t cc_rx = 0;
-
     uint8_t applies_ch_tx = applies & 0xff;
     uint8_t applies_ch_rx = (applies & 0xff00) >> 8;
 
