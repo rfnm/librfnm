@@ -39,7 +39,7 @@ include(cmake/cpm-spdlog.cmake)
 # Library
 #
 
-add_library(librfnm STATIC)
+add_library(librfnm SHARED)
 
 #target_include_directories(librfnm PUBLIC "${CMAKE_SOURCE_DIR}/include")
 target_include_directories(librfnm ${SPDLOG_INCLUDES_LEVEL} PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
@@ -71,15 +71,14 @@ target_link_libraries(librfnm PRIVATE spdlog)
 #install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(DIRECTORY include/librfnm DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-
-#install(TARGETS librfnm
-#    EXPORT librfnmTarget
-#    LIBRARY DESTINATION lib COMPONENT Runtime
-#    ARCHIVE DESTINATION lib COMPONENT Development
-#    RUNTIME DESTINATION bin COMPONENT Runtime
-#    PUBLIC_HEADER DESTINATION include COMPONENT Development
-#    BUNDLE DESTINATION bin COMPONENT Runtime
-#)
+install(TARGETS librfnm
+    EXPORT librfnmTarget
+    LIBRARY DESTINATION lib COMPONENT Runtime
+    ARCHIVE DESTINATION lib COMPONENT Development
+    RUNTIME DESTINATION bin COMPONENT Runtime
+    PUBLIC_HEADER DESTINATION include COMPONENT Development
+    BUNDLE DESTINATION bin COMPONENT Runtime
+)
 
 #install(EXPORT librfnmTarget DESTINATION librfnm)
 
