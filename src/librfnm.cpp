@@ -281,7 +281,7 @@ read_dev_status:
                 {
                     struct rfnm_dev_status dev_status;
 
-                    r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST,
+                    r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                             RFNM_GET_DEV_STATUS, 0, (unsigned char*)&dev_status, sizeof(struct rfnm_dev_status), 50);
                     if (r < 0) {
                         spdlog::error("libusb_control_transfer for RFNM_GET_DEV_STATUS failed");
@@ -388,7 +388,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
 
         struct rfnm_dev_hwinfo r_hwinfo;
 
-        r = libusb_control_transfer(thandle, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST,
+        r = libusb_control_transfer(thandle, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_GET_DEV_HWINFO, 0, (unsigned char*)&r_hwinfo, sizeof(struct rfnm_dev_hwinfo), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_HWINFO failed");
@@ -506,7 +506,7 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
 
         spdlog::info("Max theoretical transport speed is {} Mbps", s->transport_status.theoretical_mbps);
 
-        r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR,
+        r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR),
                 RFNM_B_REQUEST, RFNM_GET_SM_RESET, 0, NULL, 0, 500);
         if (r < 0) {
             spdlog::error("Couldn't reset state machine");
@@ -929,7 +929,7 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
     if (type & LIBRFNM_REQ_HWINFO) {
         struct rfnm_dev_hwinfo r_hwinfo;
 
-        r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST,
+        r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_GET_DEV_HWINFO, 0, (unsigned char*)&r_hwinfo, sizeof(struct rfnm_dev_hwinfo), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_HWINFO failed");
@@ -946,7 +946,7 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
     if (type & LIBRFNM_REQ_TX) {
         struct rfnm_dev_tx_ch_list r_chlist;
 
-        r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST,
+        r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_GET_TX_CH_LIST, 0, (unsigned char*)&r_chlist, sizeof(struct rfnm_dev_tx_ch_list), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_TX failed");
@@ -958,7 +958,7 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
     if (type & LIBRFNM_REQ_RX) {
         struct rfnm_dev_rx_ch_list r_chlist;
 
-        r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST,
+        r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_GET_RX_CH_LIST, 0, (unsigned char*)&r_chlist, sizeof(struct rfnm_dev_rx_ch_list), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_RX failed");
@@ -970,7 +970,7 @@ MSDLL rfnm_api_failcode librfnm::get(enum librfnm_req_type type) {
     if (type & LIBRFNM_REQ_DEV_STATUS) {
         struct rfnm_dev_status dev_status;
 
-        r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST,
+        r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_GET_DEV_STATUS, 0, (unsigned char*)&dev_status, sizeof(struct rfnm_dev_status), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for RFNM_GET_DEV_STATUS failed {}", r);
@@ -993,7 +993,7 @@ MSDLL rfnm_api_failcode librfnm::set(uint16_t applies, bool confirm_execution, u
         r_chlist.apply = applies_ch_tx;
         r_chlist.cc = ++cc_tx;
 
-        r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST,
+        r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_SET_TX_CH_LIST, 0, (unsigned char*)&r_chlist, sizeof(struct rfnm_dev_tx_ch_list), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_TX failed");
@@ -1007,7 +1007,7 @@ MSDLL rfnm_api_failcode librfnm::set(uint16_t applies, bool confirm_execution, u
         r_chlist.apply = applies_ch_rx;
         r_chlist.cc = ++cc_rx;
 
-        r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_OUT | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST,
+        r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_SET_RX_CH_LIST, 0, (unsigned char*)&r_chlist, sizeof(struct rfnm_dev_rx_ch_list), 50);
         if (r < 0) {
             spdlog::error("libusb_control_transfer for LIBRFNM_REQ_RX failed");
@@ -1026,7 +1026,7 @@ MSDLL rfnm_api_failcode librfnm::set(uint16_t applies, bool confirm_execution, u
         while (1) {
             struct rfnm_dev_get_set_result r_res;
 
-            r = libusb_control_transfer(usb_handle->primary, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_VENDOR, RFNM_B_REQUEST,
+            r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                     RFNM_GET_SET_RESULT, 0, (unsigned char*)&r_res, sizeof(struct rfnm_dev_get_set_result), 50);
             if (r < 0) {
                 spdlog::error("libusb_control_transfer for LIBRFNM_REQ_RX failed");
