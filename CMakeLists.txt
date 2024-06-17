@@ -45,6 +45,8 @@ add_library(librfnm STATIC)
 target_include_directories(librfnm ${SPDLOG_INCLUDES_LEVEL} PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
                                                                   "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
 
+set_target_properties(librfnm PROPERTIES OUTPUT_NAME rfnm)
+
 # sources
 target_sources(librfnm PRIVATE
   "src/librfnm.cpp" )
