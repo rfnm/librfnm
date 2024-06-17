@@ -83,7 +83,7 @@ install(TARGETS librfnm_shared
 )
 
 set_target_properties(librfnm_shared PROPERTIES OUTPUT_NAME rfnm)
-set_target_properties(librfnm_static PROPERTIES OUTPUT_NAME rfnm)
+set_target_properties(librfnm_static PROPERTIES OUTPUT_NAME rfnm_static)
 
 #install(EXPORT librfnmTarget DESTINATION librfnm)
 
