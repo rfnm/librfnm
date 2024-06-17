@@ -34,48 +34,35 @@ include(cmake/cpm.cmake)
 #include(cmake/cpm-fmtlib.cmake)
 include(cmake/cpm-spdlog.cmake)
 
-if(spdlog_ADDED)
-    include_directories("${spdlog_SOURCE_DIR}/include")
-endif()
-
-if(MSVC)
-    include_directories("${CMAKE_SOURCE_DIR}/3rdparty/libusb/include")
-endif()
 
 #
 # Library
 #
 
-add_library(objlib OBJECT ${librfnm})
-add_library(rfnm_shared SHARED $<TARGET_OBJECTS:objlib>)
-add_library(rfnm_static STATIC $<TARGET_OBJECTS:objlib>)
+add_library(librfnm STATIC)
 
-#target_include_directories(objlib PUBLIC "${CMAKE_SOURCE_DIR}/include")
-target_include_directories(objlib ${SPDLOG_INCLUDES_LEVEL} PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
-"$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+#target_include_directories(librfnm PUBLIC "${CMAKE_SOURCE_DIR}/include")
+target_include_directories(librfnm ${SPDLOG_INCLUDES_LEVEL} PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
+                                                                  "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+
+set_target_properties(librfnm PROPERTIES OUTPUT_NAME rfnm)
 
 # sources
-target_sources(objlib PRIVATE
+target_sources(librfnm PRIVATE
   "src/librfnm.cpp" )
 
 # definitions
 if(MSVC)
-  target_compile_definitions(objlib PRIVATE _CRT_SECURE_NO_WARNINGS)
+  target_compile_definitions(librfnm PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
 # features
-target_compile_features(objlib PUBLIC cxx_std_23)
+target_compile_features(librfnm PUBLIC cxx_std_23)
 
 # libraries
-target_link_libraries(objlib PRIVATE LIBUSB::LIBUSB)
-#target_link_libraries(objlib PRIVATE fmt::fmt)
-target_link_libraries(objlib PRIVATE spdlog)
-target_link_libraries(rfnm_static PRIVATE LIBUSB::LIBUSB)
-#target_link_libraries(rfnm_static PRIVATE fmt::fmt)
-target_link_libraries(rfnm_static PRIVATE spdlog)
-target_link_libraries(rfnm_shared PRIVATE LIBUSB::LIBUSB)
-#target_link_libraries(rfnm_shared PRIVATE fmt::fmt)
-target_link_libraries(rfnm_shared PRIVATE spdlog)
+target_link_libraries(librfnm PRIVATE LIBUSB::LIBUSB)
+#target_link_libraries(librfnm PRIVATE fmt::fmt)
+target_link_libraries(librfnm PRIVATE spdlog)
 
 #
 # Installation
@@ -86,19 +73,19 @@ target_link_libraries(rfnm_shared PRIVATE spdlog)
 #install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(DIRECTORY include/librfnm DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-install(TARGETS rfnm_shared
-    EXPORT librfnmTarget
-    LIBRARY DESTINATION lib COMPONENT Runtime
-    ARCHIVE DESTINATION lib COMPONENT Development
-    RUNTIME DESTINATION bin COMPONENT Runtime
-    PUBLIC_HEADER DESTINATION include COMPONENT Development
-    BUNDLE DESTINATION bin COMPONENT Runtime
-)
 
-set_target_properties(rfnm_shared PROPERTIES OUTPUT_NAME rfnm)
-set_target_properties(rfnm_static PROPERTIES OUTPUT_NAME rfnm_static)
+#install(TARGETS librfnm
+#    EXPORT librfnmTarget
+#    LIBRARY DESTINATION lib COMPONENT Runtime
+#    ARCHIVE DESTINATION lib COMPONENT Development
+#    RUNTIME DESTINATION bin COMPONENT Runtime
+#    PUBLIC_HEADER DESTINATION include COMPONENT Development
+#    BUNDLE DESTINATION bin COMPONENT Runtime
+#)
 
 #install(EXPORT librfnmTarget DESTINATION librfnm)
+
+
 
 #install(
 #  FILES "$<TARGET_RUNTIME_DLLS:librfnm>"
