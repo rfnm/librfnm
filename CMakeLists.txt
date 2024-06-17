@@ -82,7 +82,7 @@ install(TARGETS librfnm_shared
     BUNDLE DESTINATION bin COMPONENT Runtime
 )
 
-set_target_properties(librfnm_shared PROPERTIES OUTPUT_NAME rfnm)
+set_target_properties(librfnm_shared PROPERTIES OUTPUT_NAME rfnm_shared)
 set_target_properties(librfnm_static PROPERTIES OUTPUT_NAME rfnm)
 
 #install(EXPORT librfnmTarget DESTINATION librfnm)
