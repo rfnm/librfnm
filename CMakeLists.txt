@@ -67,6 +67,9 @@ endif()
 target_compile_features(objlib PUBLIC cxx_std_23)
 
 # libraries
+target_link_libraries(objlib PRIVATE LIBUSB::LIBUSB)
+#target_link_libraries(objlib PRIVATE fmt::fmt)
+target_link_libraries(objlib PRIVATE spdlog)
 target_link_libraries(rfnm_static PRIVATE LIBUSB::LIBUSB)
 #target_link_libraries(rfnm_static PRIVATE fmt::fmt)
 target_link_libraries(rfnm_static PRIVATE spdlog)
