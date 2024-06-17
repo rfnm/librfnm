@@ -40,8 +40,8 @@ include(cmake/cpm-spdlog.cmake)
 #
 
 add_library(objlib OBJECT ${librfnm})
-add_library(librfnm_shared SHARED $<TARGET_OBJECTS:objlib>)
-add_library(librfnm_static STATIC $<TARGET_OBJECTS:objlib>)
+add_library(rfnm_shared SHARED $<TARGET_OBJECTS:objlib>)
+add_library(rfnm_static STATIC $<TARGET_OBJECTS:objlib>)
 
 #target_include_directories(objlib PUBLIC "${CMAKE_SOURCE_DIR}/include")
 target_include_directories(objlib ${SPDLOG_INCLUDES_LEVEL} PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
@@ -60,9 +60,12 @@ endif()
 target_compile_features(objlib PUBLIC cxx_std_23)
 
 # libraries
-target_link_libraries(objlib PRIVATE LIBUSB::LIBUSB)
-#target_link_libraries(objlib PRIVATE fmt::fmt)
-target_link_libraries(objlib PRIVATE spdlog)
+target_link_libraries(rfnm_static PRIVATE LIBUSB::LIBUSB)
+#target_link_libraries(rfnm_static PRIVATE fmt::fmt)
+target_link_libraries(rfnm_static PRIVATE spdlog)
+target_link_libraries(rfnm_shared PRIVATE LIBUSB::LIBUSB)
+#target_link_libraries(rfnm_shared PRIVATE fmt::fmt)
+target_link_libraries(rfnm_shared PRIVATE spdlog)
 
 #
 # Installation
@@ -73,7 +76,7 @@ target_link_libraries(objlib PRIVATE spdlog)
 #install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 install(DIRECTORY include/librfnm DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-install(TARGETS librfnm_shared
+install(TARGETS rfnm_shared
     EXPORT librfnmTarget
     LIBRARY DESTINATION lib COMPONENT Runtime
     ARCHIVE DESTINATION lib COMPONENT Development
@@ -82,8 +85,8 @@ install(TARGETS librfnm_shared
     BUNDLE DESTINATION bin COMPONENT Runtime
 )
 
-set_target_properties(librfnm_shared PROPERTIES OUTPUT_NAME rfnm)
-set_target_properties(librfnm_static PROPERTIES OUTPUT_NAME rfnm_static)
+set_target_properties(rfnm_shared PROPERTIES OUTPUT_NAME rfnm)
+set_target_properties(rfnm_static PROPERTIES OUTPUT_NAME rfnm_static)
 
 #install(EXPORT librfnmTarget DESTINATION librfnm)
 
