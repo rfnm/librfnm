@@ -71,7 +71,7 @@ target_link_libraries(librfnm PRIVATE spdlog)
 #set(DEST_DIR ${CMAKE_INSTALL_LIBDIR}/SoapySDR/modules${SOAPY_SDR_ABI_VERSION}/)
 
 #install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-install(DIRECTORY include/librfnm DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+#install(DIRECTORY include/librfnm DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 
 #install(TARGETS librfnm
