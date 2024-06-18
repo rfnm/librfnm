@@ -171,7 +171,6 @@ struct librfnm_rx_buf_s {
     std::mutex in_mutex;
     std::mutex out_mutex;
     std::condition_variable cv;
-    uint8_t required_adc_id;
     uint64_t usb_cc[4];
     uint64_t qbuf_cnt;
 
