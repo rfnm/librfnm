@@ -811,9 +811,7 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
         } while (required_adc_id < 0);
     }
 
-    librfnm_rx_s.required_adc_id = required_adc_id;
-
-    if(!dqbuf_is_cc_continuous(librfnm_rx_s.required_adc_id, 1)) {
+    if(!dqbuf_is_cc_continuous(required_adc_id, 1)) {
         if (!wait_for_ms) {
             return RFNM_API_DQBUF_NO_DATA;
         }
@@ -821,14 +819,14 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
         {
             std::unique_lock lk(librfnm_rx_s.out_mutex);
             librfnm_rx_s.cv.wait_for(lk, std::chrono::milliseconds(wait_for_ms),
-                [this] { return dqbuf_is_cc_continuous(librfnm_rx_s.required_adc_id, 0) ||
-                                librfnm_rx_s.out[librfnm_rx_s.required_adc_id].size() > LIBRFNM_RX_RECOMB_BUF_LEN; }
+                [this, required_adc_id] { return dqbuf_is_cc_continuous(required_adc_id, 0) ||
+                                librfnm_rx_s.out[required_adc_id].size() > LIBRFNM_RX_RECOMB_BUF_LEN; }
             );
         }
 
-        if (!dqbuf_is_cc_continuous(librfnm_rx_s.required_adc_id, 1)) {
+        if (!dqbuf_is_cc_continuous(required_adc_id, 1)) {
             if (wait_for_ms >= 10) {
-                spdlog::info("cc timeout {}", librfnm_rx_s.usb_cc[librfnm_rx_s.required_adc_id]);
+                spdlog::info("cc timeout {}", librfnm_rx_s.usb_cc[required_adc_id]);
             }
 
             return RFNM_API_DQBUF_NO_DATA;
@@ -837,14 +835,14 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
 
     {
         std::lock_guard<std::mutex> lockGuard(librfnm_rx_s.out_mutex);
-        *buf = librfnm_rx_s.out[librfnm_rx_s.required_adc_id].top();
-        librfnm_rx_s.out[librfnm_rx_s.required_adc_id].pop();
+        *buf = librfnm_rx_s.out[required_adc_id].top();
+        librfnm_rx_s.out[required_adc_id].pop();
     }
 
     struct librfnm_rx_buf* lb;
     lb = *buf;
 
-    librfnm_rx_s.usb_cc[librfnm_rx_s.required_adc_id]++;
+    librfnm_rx_s.usb_cc[required_adc_id]++;
 
     //if ((lb->usb_cc & 0xff) < 0x10) {
     //    std::lock_guard<std::mutex> lockGuard(librfnm_rx_s.out_mutex);
