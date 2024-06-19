@@ -620,6 +620,11 @@ MSDLL rfnm_api_failcode librfnm::rx_stream(enum librfnm_stream_format format, in
         return RFNM_API_NOT_SUPPORTED;
     }
 
+    // expected CC of UINT64_MAX is a special value meaning to accept whatever comes
+    for (int i = 0; i < 4; i++) {
+        librfnm_rx_s.usb_cc[i] = UINT64_MAX;
+    }
+
     for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
         librfnm_thread_data[i].rx_active = 1;
@@ -738,6 +743,23 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
 
     buf = librfnm_rx_s.out[adc_id].top();
+
+    // special case for first buffer of stream
+    if (librfnm_rx_s.usb_cc[adc_id] == UINT64_MAX) {
+        int ret = 0;
+
+        // wait for at least 10 buffers to come in case they are out-of-order
+        if (queue_size >= 10) {
+            librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc;
+            spdlog::info("initial cc {} adc {}", librfnm_rx_s.usb_cc[adc_id], adc_id);
+            ret = 1;
+        }
+
+        if (acquire_lock) {
+            librfnm_rx_s.out_mutex.unlock();
+        }
+        return ret;
+    }
 
     while (queue_size > 1) {
         if (buf->usb_cc < librfnm_rx_s.usb_cc[adc_id]) {
