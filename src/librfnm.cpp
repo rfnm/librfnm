@@ -621,8 +621,8 @@ MSDLL rfnm_api_failcode librfnm::rx_stream(enum librfnm_stream_format format, in
     }
 
     // expected CC of UINT64_MAX is a special value meaning to accept whatever comes
-    for (int i = 0; i < 4; i++) {
-        librfnm_rx_s.usb_cc[i] = UINT64_MAX;
+    for (int adc_id = 0; adc_id < 4; adc_id++) {
+        librfnm_rx_s.usb_cc[adc_id] = UINT64_MAX;
     }
 
     for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
@@ -893,6 +893,25 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
     //}
 
     //spdlog::info("cc {} adc {}", lb->usb_cc, lb->adc_id);
+
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode librfnm::rx_flush(uint32_t wait_for_ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(wait_for_ms));
+
+    for (int adc_id = 0; adc_id < 4; adc_id++) {
+        std::lock_guard lock_out(librfnm_rx_s.out_mutex);
+
+        while (librfnm_rx_s.out[adc_id].size()) {
+            struct librfnm_rx_buf *buf = librfnm_rx_s.out[adc_id].top();
+            librfnm_rx_s.out[adc_id].pop();
+            std::lock_guard lock_in(librfnm_rx_s.in_mutex);
+            librfnm_rx_s.in.push(buf);
+        }
+
+        librfnm_rx_s.usb_cc[adc_id] = UINT64_MAX;
+    }
 
     return RFNM_API_OK;
 }
