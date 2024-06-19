@@ -773,7 +773,7 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         // wait for at least 10 buffers to come in case they are out-of-order
         if (queue_size >= 10) {
             librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc;
-            spdlog::info("initial cc {} adc {}", librfnm_rx_s.usb_cc[adc_id], adc_id);
+            //spdlog::info("initial cc {} adc {}", librfnm_rx_s.usb_cc[adc_id], adc_id);
             ret = 1;
         }
 
