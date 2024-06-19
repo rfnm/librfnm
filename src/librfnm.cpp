@@ -697,24 +697,23 @@ MSDLL int librfnm::single_ch_id_bitmap_to_adc_id(uint8_t ch_ids) {
 }
 
 MSDLL void librfnm::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
-    struct librfnm_rx_buf* buf;
-
     if (acquire_lock) {
         librfnm_rx_s.out_mutex.lock();
     }
     librfnm_rx_s.in_mutex.lock();
 
-    if (librfnm_rx_s.out[adc_id].size()) {
-        int size = librfnm_rx_s.out[adc_id].size();
-        for (int i = 0; i < size / 2; i++) {
-            buf = librfnm_rx_s.out[adc_id].top();
-            librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc + 1;
-            librfnm_rx_s.in.push(buf);
-            librfnm_rx_s.out[adc_id].pop();
-        }
+    uint64_t old_cc = librfnm_rx_s.usb_cc[adc_id];
+    size_t queue_size = librfnm_rx_s.out[adc_id].size();
+
+    // use whatever buffer is at the top of the queue
+    if (queue_size) {
+        librfnm_rx_s.usb_cc[adc_id] = librfnm_rx_s.out[adc_id].top()->usb_cc;
+    } else {
+        librfnm_rx_s.usb_cc[adc_id]++;
     }
 
-    //spdlog::info("new cc is {}", librfnm_rx_s.usb_cc[adc_id]);
+    spdlog::info("cc {} overwritten to {} at queue size {} adc {}",
+            old_cc, librfnm_rx_s.usb_cc[adc_id], queue_size, adc_id);
 
     librfnm_rx_s.in_mutex.unlock();
     if (acquire_lock) {
@@ -764,8 +763,6 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
     else {
         if (queue_size > LIBRFNM_RX_RECOMB_BUF_LEN) {
-            spdlog::info("cc {} overwritten at queue size {} adc {}", librfnm_rx_s.usb_cc[adc_id],
-                    queue_size, adc_id);
             dqbuf_overwrite_cc(adc_id, acquire_lock);
         }
         return 0;
