@@ -847,7 +847,7 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
 
         if (!dqbuf_is_cc_continuous(required_adc_id, 1)) {
             if (wait_for_ms >= 10) {
-                spdlog::info("cc timeout {}", librfnm_rx_s.usb_cc[required_adc_id]);
+                spdlog::info("cc timeout {} adc {}", librfnm_rx_s.usb_cc[required_adc_id], required_adc_id);
             }
 
             return RFNM_API_DQBUF_NO_DATA;
