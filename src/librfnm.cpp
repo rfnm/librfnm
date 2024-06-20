@@ -620,10 +620,26 @@ MSDLL rfnm_api_failcode librfnm::rx_stream(enum librfnm_stream_format format, in
         return RFNM_API_NOT_SUPPORTED;
     }
 
+    // expected CC of UINT64_MAX is a special value meaning to accept whatever comes
+    for (int adc_id = 0; adc_id < 4; adc_id++) {
+        librfnm_rx_s.usb_cc[adc_id] = UINT64_MAX;
+    }
+
     for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
         librfnm_thread_data[i].rx_active = 1;
         librfnm_thread_data[i].cv.notify_one();
+    }
+
+    return ret;
+}
+
+MSDLL rfnm_api_failcode librfnm::rx_stream_stop() {
+    rfnm_api_failcode ret = RFNM_API_OK;
+
+    for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+        std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
+        librfnm_thread_data[i].rx_active = 0;
     }
 
     return ret;
@@ -653,6 +669,17 @@ MSDLL rfnm_api_failcode librfnm::tx_stream(enum librfnm_stream_format format, in
         std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
         librfnm_thread_data[i].tx_active = 1;
         librfnm_thread_data[i].cv.notify_one();
+    }
+
+    return ret;
+}
+
+MSDLL rfnm_api_failcode librfnm::tx_stream_stop() {
+    rfnm_api_failcode ret = RFNM_API_OK;
+
+    for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+        std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
+        librfnm_thread_data[i].tx_active = 0;
     }
 
     return ret;
@@ -697,24 +724,23 @@ MSDLL int librfnm::single_ch_id_bitmap_to_adc_id(uint8_t ch_ids) {
 }
 
 MSDLL void librfnm::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
-    struct librfnm_rx_buf* buf;
-
     if (acquire_lock) {
         librfnm_rx_s.out_mutex.lock();
     }
     librfnm_rx_s.in_mutex.lock();
 
-    if (librfnm_rx_s.out[adc_id].size()) {
-        int size = librfnm_rx_s.out[adc_id].size();
-        for (int i = 0; i < size / 2; i++) {
-            buf = librfnm_rx_s.out[adc_id].top();
-            librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc + 1;
-            librfnm_rx_s.in.push(buf);
-            librfnm_rx_s.out[adc_id].pop();
-        }
+    uint64_t old_cc = librfnm_rx_s.usb_cc[adc_id];
+    size_t queue_size = librfnm_rx_s.out[adc_id].size();
+
+    // use whatever buffer is at the top of the queue
+    if (queue_size) {
+        librfnm_rx_s.usb_cc[adc_id] = librfnm_rx_s.out[adc_id].top()->usb_cc;
+    } else {
+        librfnm_rx_s.usb_cc[adc_id]++;
     }
 
-    //spdlog::info("new cc is {}", librfnm_rx_s.usb_cc[adc_id]);
+    spdlog::info("cc {} overwritten to {} at queue size {} adc {}",
+            old_cc, librfnm_rx_s.usb_cc[adc_id], queue_size, adc_id);
 
     librfnm_rx_s.in_mutex.unlock();
     if (acquire_lock) {
@@ -731,15 +757,33 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
 
     queue_size = librfnm_rx_s.out[adc_id].size();
-    if (queue_size < 5) {
+    if (queue_size < 1) {
         if (acquire_lock) {
             librfnm_rx_s.out_mutex.unlock();
         }
         return 0;
     }
 
-    do {
-        buf = librfnm_rx_s.out[adc_id].top();
+    buf = librfnm_rx_s.out[adc_id].top();
+
+    // special case for first buffer of stream
+    if (librfnm_rx_s.usb_cc[adc_id] == UINT64_MAX) {
+        int ret = 0;
+
+        // wait for at least 10 buffers to come in case they are out-of-order
+        if (queue_size >= 10) {
+            librfnm_rx_s.usb_cc[adc_id] = buf->usb_cc;
+            //spdlog::info("initial cc {} adc {}", librfnm_rx_s.usb_cc[adc_id], adc_id);
+            ret = 1;
+        }
+
+        if (acquire_lock) {
+            librfnm_rx_s.out_mutex.unlock();
+        }
+        return ret;
+    }
+
+    while (queue_size > 1) {
         if (buf->usb_cc < librfnm_rx_s.usb_cc[adc_id]) {
             uint64_t usb_cc = buf->usb_cc;
             std::lock_guard<std::mutex> lockGuard(librfnm_rx_s.in_mutex);
@@ -747,11 +791,12 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             librfnm_rx_s.in.push(buf);
             queue_size--;
             spdlog::info("stale cc {} discarded from adc {}", usb_cc, adc_id);
+            buf = librfnm_rx_s.out[adc_id].top();
         }
         else {
             break;
         }
-    } while (queue_size > 1);
+    };
 
     if (acquire_lock) {
         librfnm_rx_s.out_mutex.unlock();
@@ -762,8 +807,6 @@ MSDLL int librfnm::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
     else {
         if (queue_size > LIBRFNM_RX_RECOMB_BUF_LEN) {
-            spdlog::info("cc {} overwritten at queue size {} adc {}", librfnm_rx_s.usb_cc[adc_id],
-                    queue_size, adc_id);
             dqbuf_overwrite_cc(adc_id, acquire_lock);
         }
         return 0;
@@ -811,9 +854,7 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
         } while (required_adc_id < 0);
     }
 
-    librfnm_rx_s.required_adc_id = required_adc_id;
-
-    if(!dqbuf_is_cc_continuous(librfnm_rx_s.required_adc_id, 1)) {
+    if(!dqbuf_is_cc_continuous(required_adc_id, 1)) {
         if (!wait_for_ms) {
             return RFNM_API_DQBUF_NO_DATA;
         }
@@ -821,14 +862,14 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
         {
             std::unique_lock lk(librfnm_rx_s.out_mutex);
             librfnm_rx_s.cv.wait_for(lk, std::chrono::milliseconds(wait_for_ms),
-                [this] { return dqbuf_is_cc_continuous(librfnm_rx_s.required_adc_id, 0) ||
-                                librfnm_rx_s.out[librfnm_rx_s.required_adc_id].size() > LIBRFNM_RX_RECOMB_BUF_LEN; }
+                [this, required_adc_id] { return dqbuf_is_cc_continuous(required_adc_id, 0) ||
+                                librfnm_rx_s.out[required_adc_id].size() > LIBRFNM_RX_RECOMB_BUF_LEN; }
             );
         }
 
-        if (!dqbuf_is_cc_continuous(librfnm_rx_s.required_adc_id, 1)) {
+        if (!dqbuf_is_cc_continuous(required_adc_id, 1)) {
             if (wait_for_ms >= 10) {
-                spdlog::info("cc timeout {}", librfnm_rx_s.usb_cc[librfnm_rx_s.required_adc_id]);
+                spdlog::info("cc timeout {} adc {}", librfnm_rx_s.usb_cc[required_adc_id], required_adc_id);
             }
 
             return RFNM_API_DQBUF_NO_DATA;
@@ -837,14 +878,14 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
 
     {
         std::lock_guard<std::mutex> lockGuard(librfnm_rx_s.out_mutex);
-        *buf = librfnm_rx_s.out[librfnm_rx_s.required_adc_id].top();
-        librfnm_rx_s.out[librfnm_rx_s.required_adc_id].pop();
+        *buf = librfnm_rx_s.out[required_adc_id].top();
+        librfnm_rx_s.out[required_adc_id].pop();
     }
 
     struct librfnm_rx_buf* lb;
     lb = *buf;
 
-    librfnm_rx_s.usb_cc[librfnm_rx_s.required_adc_id]++;
+    librfnm_rx_s.usb_cc[required_adc_id]++;
 
     //if ((lb->usb_cc & 0xff) < 0x10) {
     //    std::lock_guard<std::mutex> lockGuard(librfnm_rx_s.out_mutex);
@@ -852,6 +893,25 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
     //}
 
     //spdlog::info("cc {} adc {}", lb->usb_cc, lb->adc_id);
+
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode librfnm::rx_flush(uint32_t wait_for_ms) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(wait_for_ms));
+
+    for (int adc_id = 0; adc_id < 4; adc_id++) {
+        std::lock_guard lock_out(librfnm_rx_s.out_mutex);
+
+        while (librfnm_rx_s.out[adc_id].size()) {
+            struct librfnm_rx_buf *buf = librfnm_rx_s.out[adc_id].top();
+            librfnm_rx_s.out[adc_id].pop();
+            std::lock_guard lock_in(librfnm_rx_s.in_mutex);
+            librfnm_rx_s.in.push(buf);
+        }
+
+        librfnm_rx_s.usb_cc[adc_id] = UINT64_MAX;
+    }
 
     return RFNM_API_OK;
 }
