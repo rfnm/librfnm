@@ -77,7 +77,7 @@ enum librfnm_tx_latency_policy {
 #define LIBRFNM_THREAD_COUNT 16
 
 #define LIBRFNM_MIN_RX_BUFCNT 1000
-#define LIBRFNM_RX_RECOMB_BUF_LEN (400)
+#define LIBRFNM_RX_RECOMB_BUF_LEN (100)
 
 #define LIBRFNM_CH0 (0x1 << 0)
 #define LIBRFNM_CH1 (0x1 << 1)
@@ -171,7 +171,6 @@ struct librfnm_rx_buf_s {
     std::mutex in_mutex;
     std::mutex out_mutex;
     std::condition_variable cv;
-    uint8_t required_adc_id;
     uint64_t usb_cc[4];
     uint64_t qbuf_cnt;
 
@@ -215,11 +214,17 @@ public:
 
     MSDLL rfnm_api_failcode rx_stream(enum librfnm_stream_format format, int* bufsize);
 
+    MSDLL rfnm_api_failcode rx_stream_stop();
+
     MSDLL rfnm_api_failcode rx_qbuf(struct librfnm_rx_buf* buf);
 
     MSDLL rfnm_api_failcode rx_dqbuf(struct librfnm_rx_buf** buf, uint8_t ch_ids = 0, uint32_t wait_for_ms = 20);
 
+    MSDLL rfnm_api_failcode rx_flush(uint32_t wait_for_ms = 20);
+
     MSDLL rfnm_api_failcode tx_stream(enum librfnm_stream_format format, int* bufsize, enum librfnm_tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
+
+    MSDLL rfnm_api_failcode tx_stream_stop();
 
     MSDLL rfnm_api_failcode tx_qbuf(struct librfnm_tx_buf* buf, uint32_t wait_for_ms = 20);
 
