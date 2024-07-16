@@ -266,4 +266,5 @@ private:
     int last_dqbuf_ch = 0;
 
     int rx_stream_count = 0;
+    bool rx_buffers_allocated = false;
 };

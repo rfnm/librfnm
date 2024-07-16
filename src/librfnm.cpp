@@ -569,6 +569,18 @@ MSDLL librfnm::~librfnm() {
 
     delete s;
 
+    if (rx_buffers_allocated) {
+        rx_flush();
+
+        // no need to take in_mutex as threads are finished
+        while (librfnm_rx_s.in.size()) {
+            librfnm_rx_buf *rxbuf = librfnm_rx_s.in.front();
+            librfnm_rx_s.in.pop();
+            delete[] rxbuf->buf;
+            delete rxbuf;
+        }
+    }
+
     if (usb_handle->primary) {
         libusb_release_interface(usb_handle->primary, 0);
         libusb_close(usb_handle->primary);
@@ -608,6 +620,18 @@ MSDLL rfnm_api_failcode librfnm::rx_stream() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
     rx_stream_count++;
+
+    // allocate buffers if the user didn't allocate them themselves
+    if (!librfnm_rx_s.qbuf_cnt) {
+        rx_buffers_allocated = true;
+        size_t bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
+
+        for (size_t i = 0; i < LIBRFNM_MIN_RX_BUFCNT; i++) {
+            librfnm_rx_buf *rxbuf = new librfnm_rx_buf();
+            rxbuf->buf = new uint8_t[bufsize];
+            rx_qbuf(rxbuf, true);
+        }
+    }
 
     // expected CC of UINT64_MAX is a special value meaning to accept whatever comes
     for (int adc_id = 0; adc_id < 4; adc_id++) {
