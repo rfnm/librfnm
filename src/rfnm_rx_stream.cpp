@@ -23,11 +23,6 @@ MSDLL rfnm_rx_stream::rfnm_rx_stream(librfnm &rfnm, uint8_t ch_ids) : lrfnm(rfnm
 
     outbufsize = RFNM_USB_RX_PACKET_ELEM_CNT * lrfnm.s->transport_status.rx_stream_format;
 
-    lrfnm.rx_stream();
-
-    // flush old junk before streaming new data
-    lrfnm.rx_flush(20, ch_ids);
-
     for (unsigned int channel : channels) {
         partial_rx_buf[channel].buf = new uint8_t[outbufsize];
         phytimer_ticks_per_sample[channel] = 4 * lrfnm.s->rx.ch[channel].samp_freq_div_n;
@@ -37,7 +32,8 @@ MSDLL rfnm_rx_stream::rfnm_rx_stream(librfnm &rfnm, uint8_t ch_ids) : lrfnm(rfnm
 }
 
 MSDLL rfnm_rx_stream::~rfnm_rx_stream() {
-    // free allocated buffers
+    deactivate();
+
     for (unsigned int channel : channels) {
         delete[] partial_rx_buf[channel].buf;
     }
@@ -78,12 +74,22 @@ static void applyQuadDcOffset(T *buf, size_t n, const T *offsets) {
 MSDLL rfnm_api_failcode rfnm_rx_stream::activate() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
-    // start ADCs
+    lrfnm.rx_stream();
+    stream_active = true;
+
     uint16_t apply_mask = 0;
+    uint8_t chan_mask = 0;
     for (unsigned int channel : channels) {
         lrfnm.s->rx.ch[channel].enable = RFNM_CH_ON;
         apply_mask |= librfnm_rx_chan_apply[channel];
+        chan_mask |= librfnm_rx_chan_flags[channel];
     }
+
+    // flush old junk before streaming new data
+    ret = lrfnm.rx_flush(20, chan_mask);
+    if (ret) return ret;
+
+    // start ADCs
     ret = lrfnm.set(apply_mask);
     if (ret) return ret;
 
@@ -162,10 +168,13 @@ MSDLL rfnm_api_failcode rfnm_rx_stream::activate() {
 }
 
 MSDLL rfnm_api_failcode rfnm_rx_stream::deactivate() {
-    rfnm_api_failcode ret;
-    
+    rfnm_api_failcode ret = RFNM_API_OK;
+
+    if (!stream_active) return ret;
+
     // stop the receiver threads
     lrfnm.rx_stream_stop();
+    stream_active = false;
 
     // stop the ADCs
     uint16_t apply_mask = 0;
