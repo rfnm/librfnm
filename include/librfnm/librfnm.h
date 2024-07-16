@@ -1,14 +1,13 @@
 #pragma once
-#include <iostream>
+
 #include <queue>
 #include <condition_variable>
-#include <iostream>
 #include <mutex>
 #include <string>
 #include <thread>
-#include <math.h>
 #include <array>
-#include <algorithm>
+#include <vector>
+
 #include "librfnm_api.h"
 
 #if defined(__GNUC__)
