@@ -37,6 +37,7 @@ private:
 
     std::vector<unsigned int> channels;
     size_t outbufsize = 0;
+    bool stream_active = false;
 
     struct librfnm_rx_buf * pending_rx_buf[MAX_RX_CHAN_COUNT] = {};
 
