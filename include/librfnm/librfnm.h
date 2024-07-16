@@ -210,17 +210,19 @@ public:
 
     MSDLL rfnm_api_failcode set(uint16_t applies, bool confirm_execution = true, uint32_t wait_for_ms = 1000);
 
-    MSDLL rfnm_api_failcode rx_stream(enum librfnm_stream_format format, int* bufsize);
+    MSDLL rfnm_api_failcode set_stream_format(enum librfnm_stream_format format, size_t *bufsize);
+
+    MSDLL rfnm_api_failcode rx_stream();
 
     MSDLL rfnm_api_failcode rx_stream_stop();
 
-    MSDLL rfnm_api_failcode rx_qbuf(struct librfnm_rx_buf* buf);
+    MSDLL rfnm_api_failcode rx_qbuf(struct librfnm_rx_buf* buf, bool new_buffer = false);
 
     MSDLL rfnm_api_failcode rx_dqbuf(struct librfnm_rx_buf** buf, uint8_t ch_ids = 0, uint32_t wait_for_ms = 20);
 
-    MSDLL rfnm_api_failcode rx_flush(uint32_t wait_for_ms = 20);
+    MSDLL rfnm_api_failcode rx_flush(uint32_t wait_for_ms = 20, uint8_t ch_ids = 0xFF);
 
-    MSDLL rfnm_api_failcode tx_stream(enum librfnm_stream_format format, int* bufsize, enum librfnm_tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
+    MSDLL rfnm_api_failcode tx_stream(enum librfnm_tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
 
     MSDLL rfnm_api_failcode tx_stream_stop();
 
@@ -262,4 +264,6 @@ private:
     uint32_t cc_tx = 0;
     uint32_t cc_rx = 0;
     int last_dqbuf_ch = 0;
+
+    int rx_stream_count = 0;
 };

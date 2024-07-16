@@ -582,43 +582,32 @@ MSDLL librfnm::~librfnm() {
     libusb_exit(NULL);
 }
 
-#if 0
-int librfnm::format_to_bytes_per_ele(enum librfnm_stream_format format) {
-    switch (format) {
-    case LIBRFNM_STREAM_FORMAT_CS8:
-        return 2;
-        break;
-    case LIBRFNM_STREAM_FORMAT_CS16:
-        return 4;
-        break;
-    case LIBRFNM_STREAM_FORMAT_CF32:
-        return 8;
-        break;
-    default:
-        return 0;
-    }
-}
-#endif
-
-MSDLL rfnm_api_failcode librfnm::rx_stream(enum librfnm_stream_format format, int* bufsize) {
-    rfnm_api_failcode ret = RFNM_API_OK;
-
-    switch (format) {
-    case LIBRFNM_STREAM_FORMAT_CS8:
-        s->transport_status.rx_stream_format = format;
-        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
-        break;
-    case LIBRFNM_STREAM_FORMAT_CS16:
-        s->transport_status.rx_stream_format = format;
-        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
-        break;
-    case LIBRFNM_STREAM_FORMAT_CF32:
-        s->transport_status.rx_stream_format = format;
-        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
-        break;
-    default:
+MSDLL rfnm_api_failcode librfnm::set_stream_format(enum librfnm_stream_format format, size_t *bufsize) {
+    if (librfnm_rx_s.qbuf_cnt) {
+        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
         return RFNM_API_NOT_SUPPORTED;
     }
+
+    switch (format) {
+    case LIBRFNM_STREAM_FORMAT_CS8:
+    case LIBRFNM_STREAM_FORMAT_CS16:
+    case LIBRFNM_STREAM_FORMAT_CF32:
+        s->transport_status.rx_stream_format = format;
+        s->transport_status.tx_stream_format = format;
+        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
+        break;
+    default:
+        *bufsize = 0;
+        return RFNM_API_NOT_SUPPORTED;
+    }
+
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode librfnm::rx_stream() {
+    rfnm_api_failcode ret = RFNM_API_OK;
+
+    rx_stream_count++;
 
     // expected CC of UINT64_MAX is a special value meaning to accept whatever comes
     for (int adc_id = 0; adc_id < 4; adc_id++) {
@@ -637,33 +626,20 @@ MSDLL rfnm_api_failcode librfnm::rx_stream(enum librfnm_stream_format format, in
 MSDLL rfnm_api_failcode librfnm::rx_stream_stop() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
-    for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
-        std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
-        librfnm_thread_data[i].rx_active = 0;
+    if (rx_stream_count > 0) rx_stream_count--;
+
+    if (rx_stream_count == 0) {
+        for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+            std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
+            librfnm_thread_data[i].rx_active = 0;
+        }
     }
 
     return ret;
 }
 
-MSDLL rfnm_api_failcode librfnm::tx_stream(enum librfnm_stream_format format, int* bufsize, enum librfnm_tx_latency_policy policy) {
+MSDLL rfnm_api_failcode librfnm::tx_stream(enum librfnm_tx_latency_policy policy) {
     rfnm_api_failcode ret = RFNM_API_OK;
-
-    switch (format) {
-    case LIBRFNM_STREAM_FORMAT_CS8:
-        s->transport_status.tx_stream_format = format;
-        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * 2;
-        break;
-    case LIBRFNM_STREAM_FORMAT_CS16:
-        s->transport_status.tx_stream_format = format;
-        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * 4;
-        break;
-    case LIBRFNM_STREAM_FORMAT_CF32:
-        s->transport_status.tx_stream_format = format;
-        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * 8;
-        break;
-    default:
-        return RFNM_API_NOT_SUPPORTED;
-    }
 
     for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(librfnm_thread_data[i].cv_mutex);
@@ -685,9 +661,9 @@ MSDLL rfnm_api_failcode librfnm::tx_stream_stop() {
     return ret;
 }
 
-MSDLL rfnm_api_failcode librfnm::rx_qbuf(struct librfnm_rx_buf * buf) {
+MSDLL rfnm_api_failcode librfnm::rx_qbuf(struct librfnm_rx_buf * buf, bool new_buffer) {
     std::lock_guard<std::mutex> lockGuard(librfnm_rx_s.in_mutex);
-    librfnm_rx_s.qbuf_cnt++;
+    if (new_buffer) librfnm_rx_s.qbuf_cnt++;
     librfnm_rx_s.in.push(buf);
     return RFNM_API_OK;
 }
@@ -897,10 +873,14 @@ MSDLL rfnm_api_failcode librfnm::rx_dqbuf(struct librfnm_rx_buf ** buf, uint8_t 
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode librfnm::rx_flush(uint32_t wait_for_ms) {
+MSDLL rfnm_api_failcode librfnm::rx_flush(uint32_t wait_for_ms, uint8_t ch_ids) {
     std::this_thread::sleep_for(std::chrono::milliseconds(wait_for_ms));
 
-    for (int adc_id = 0; adc_id < 4; adc_id++) {
+    for (int ch_id = 0; ch_id < 8; ch_id++) {
+        if (!(ch_ids & (1 << ch_id))) continue;
+
+        int adc_id = s->rx.ch[ch_id].adc_id;
+
         std::lock_guard lock_out(librfnm_rx_s.out_mutex);
 
         while (librfnm_rx_s.out[adc_id].size()) {
