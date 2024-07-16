@@ -1,8 +1,0 @@
-CPMAddPackage(
-  NAME spdlog
-  GITHUB_REPOSITORY gabime/spdlog
-  VERSION 1.12.0
-  OPTIONS
-    "BUILD_SHARED_LIBS OFF"
-    "SPDLOG_FMT_EXTERNAL OFF"
-)
