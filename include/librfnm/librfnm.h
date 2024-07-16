@@ -1,5 +1,5 @@
+#pragma once
 #include <iostream>
-#include "librfnm_api.h"
 #include <queue>
 #include <condition_variable>
 #include <iostream>
@@ -9,8 +9,7 @@
 #include <math.h>
 #include <array>
 #include <algorithm>
-
-#pragma once
+#include "librfnm_api.h"
 
 #if defined(__GNUC__)
 #define RFNM_PACKED_STRUCT( __Declaration__ ) __Declaration__ __attribute__((__packed__))
