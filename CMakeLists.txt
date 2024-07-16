@@ -1,105 +1,99 @@
-#
-# CMake
-#
+cmake_minimum_required(VERSION 3.13)
+project(librfnm VERSION 0.2.0)
 
-cmake_minimum_required(VERSION 3.22)
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+# Options
+option(BUILD_RFNM_UTILS "Build RFNM utilities such as rfnm_info" ON)
+option(INSTALL_UDEV_RULES "Install UDEV rules (Linux only)" ON)
 
-#
-# Project
-#
+# List all source files
+file(GLOB_RECURSE SRC "src/*.cpp")
 
-project(librfnm
-  LANGUAGES CXX
-  VERSION 0.0.1
-)
+# On windows, all symbols must be exported
+if (MSVC)
+    set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+endif ()
 
-#select the release build type by default to get optimization flags
-if(NOT DEFINED CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE "RelWithDebInfo")
-  message(STATUS "Build type not specified: defaulting to release.")
-endif()
+# Build objects
+add_library(rfnm_obj OBJECT ${SRC})
 
-#enable PIC globally
-set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+# Enable building position independent code since that's required for a shared library
+set_property(TARGET rfnm_obj PROPERTY POSITION_INDEPENDENT_CODE ON)
 
+# Link to static and dynamic libs
+add_library(rfnm_static STATIC $<TARGET_OBJECTS:rfnm_obj>)
+add_library(rfnm SHARED $<TARGET_OBJECTS:rfnm_obj>)
 
-#
-# Dependencies
-#
+# On platforms other than MSVC, make sure the static lib doesn't have "static" in its name
+if (NOT MSVC)
+    set_target_properties(rfnm_static PROPERTIES OUTPUT_NAME "rfnm")
+endif ()
 
-find_package(Libusb REQUIRED)
+# Find spdlog
+find_package(spdlog CONFIG REQUIRED)
 
-include(cmake/cpm.cmake)
-#include(cmake/cpm-fmtlib.cmake)
-include(cmake/cpm-spdlog.cmake)
+# Find libusb
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(libusb REQUIRED IMPORTED_TARGET libusb-1.0)
 
+# Called to configure the object, static and dynamic targets, avoids code duplication
+function(configure_rfnm_target target)
+    # Set C++ standard to C++17
+    target_compile_features(${target} PUBLIC cxx_std_17)
 
-#
-# Library
-#
+    # Include the include folder
+    target_include_directories(${target} PUBLIC "include/")
 
-add_library(librfnm STATIC)
+    # Link to spdlog
+    target_link_libraries(${target} PRIVATE spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32>)
 
-#target_include_directories(librfnm PUBLIC "${CMAKE_SOURCE_DIR}/include")
-target_include_directories(librfnm ${SPDLOG_INCLUDES_LEVEL} PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_LIST_DIR}/include>"
-                                                                  "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")
+    # Link to libusb
+    target_link_libraries(${target} PRIVATE PkgConfig::libusb)
+endfunction()
 
-set_target_properties(librfnm PROPERTIES OUTPUT_NAME rfnm)
+# Configure all targets
+configure_rfnm_target(rfnm_obj)
+configure_rfnm_target(rfnm_static)
+configure_rfnm_target(rfnm)
 
-# sources
-target_sources(librfnm PRIVATE
-  "src/librfnm.cpp" )
+# On Windows, the install prefix should default to "C:/Program Files/RFNM" (TODO: Have it default instead of override)
+if (MSVC)
+    set(CMAKE_INSTALL_PREFIX "C:/Program Files/RFNM/")
+    set(CMAKE_INSTALL_BINDIR "bin")
+    set(CMAKE_INSTALL_LIBDIR "lib")
+    set(CMAKE_INSTALL_INCLUDEDIR "include")
+else ()
+    include(GNUInstallDirs)
+endif ()
 
-# definitions
-if(MSVC)
-  target_compile_definitions(librfnm PRIVATE _CRT_SECURE_NO_WARNINGS)
-endif()
+# Configure pkgconfig file
+configure_file(${CMAKE_SOURCE_DIR}/librfnm.pc.in ${CMAKE_CURRENT_BINARY_DIR}/librfnm.pc @ONLY)
 
-# features
-target_compile_features(librfnm PUBLIC cxx_std_23)
+# Install pkgconfig file
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/librfnm.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 
-# libraries
-target_link_libraries(librfnm PRIVATE LIBUSB::LIBUSB)
-#target_link_libraries(librfnm PRIVATE fmt::fmt)
-target_link_libraries(librfnm PRIVATE spdlog)
+# Install the library
+install(TARGETS rfnm_static rfnm)
 
-#
-# Installation
-#
+# Install the headers
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-#set(DEST_DIR ${CMAKE_INSTALL_LIBDIR}/SoapySDR/modules${SOAPY_SDR_ABI_VERSION}/)
+# On Windows, install dependencies
+if (MSVC)
+    install(FILES $<TARGET_FILE_DIR:rfnm>/spdlog.dll DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES $<TARGET_FILE_DIR:rfnm>/fmt.dll DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(FILES $<TARGET_FILE_DIR:rfnm>/libusb-1.0.dll DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif ()
 
-#install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-#install(DIRECTORY include/librfnm DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+# Install UDEV rules
+if (LINUX AND INSTALL_UDEV_RULES)
+    install(FILES ${CMAKE_SOURCE_DIR}/rfnm.rules DESTINATION ${CMAKE_INSTALL_LIBDIR}/udev/rules.d)
+endif ()
 
+# Build utils if enabled
+if (BUILD_RFNM_UTILS)
+    add_subdirectory("utils/rfnm_info")
+endif ()
 
-#install(TARGETS librfnm
-#    EXPORT librfnmTarget
-#    LIBRARY DESTINATION lib COMPONENT Runtime
-#    ARCHIVE DESTINATION lib COMPONENT Development
-#    RUNTIME DESTINATION bin COMPONENT Runtime
-#    PUBLIC_HEADER DESTINATION include COMPONENT Development
-#    BUNDLE DESTINATION bin COMPONENT Runtime
-#)
-
-#install(EXPORT librfnmTarget DESTINATION librfnm)
-
-
-
-#install(
-#  FILES "$<TARGET_RUNTIME_DLLS:librfnm>"
-#  DESTINATION ${DEST_DIR}
-#)
-
-#install(
-#  TARGETS librfnm
-#  DESTINATION ${DEST_DIR}
-#)
-
-#if(MSVC)
-#  install(
-#    FILES "$<$<OR:$<CONFIG:Debug>,$<CONFIG:RelWithDebInfo>>:$<TARGET_PDB_FILE:librfnm>>"
-#    DESTINATION "bin"
-#  )
-#endif()
+# Create uninstall target
+configure_file(${CMAKE_SOURCE_DIR}/cmake_uninstall.cmake ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake @ONLY)
+add_custom_target(uninstall ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
