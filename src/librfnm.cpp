@@ -382,7 +382,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> librfnm::find(enum librfnm_transport t
 
         r = libusb_claim_interface(thandle, 0);
         if (r < 0) {
-            spdlog::error("Found RFNM device, but couldn't claim the interface, {}, {}", r, libusb_strerror(r));
+            spdlog::error("Found RFNM device, but couldn't claim the interface, {}, {}", r, libusb_strerror((libusb_error)r));
             goto next;
         }
 
@@ -487,7 +487,7 @@ MSDLL librfnm::librfnm(enum librfnm_transport transport, std::string address, en
 
         r = libusb_claim_interface(usb_handle->primary, 0);
         if (r < 0) {
-            spdlog::error("Found RFNM device, but couldn't claim the interface, {}, {}", r, libusb_strerror(r));
+            spdlog::error("Found RFNM device, but couldn't claim the interface, {}, {}", r, libusb_strerror((libusb_error)r));
             goto next;
         }
 
