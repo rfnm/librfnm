@@ -620,10 +620,10 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
 }
 
 MSDLL rx_stream * device::rx_create_stream(uint8_t ch_ids) {
-    return new rfnm::rx_stream(*this, ch_ids);
+    return new rx_stream(*this, ch_ids);
 }
 
-MSDLL rfnm_api_failcode device::rx_stream() {
+MSDLL rfnm_api_failcode device::rx_stream_start() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
     rx_stream_count++;
@@ -669,7 +669,7 @@ MSDLL rfnm_api_failcode device::rx_stream_stop() {
     return ret;
 }
 
-MSDLL rfnm_api_failcode device::tx_stream(enum tx_latency_policy policy) {
+MSDLL rfnm_api_failcode device::tx_stream_start(enum tx_latency_policy policy) {
     rfnm_api_failcode ret = RFNM_API_OK;
 
     for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
