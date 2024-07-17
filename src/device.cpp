@@ -619,7 +619,7 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
     return RFNM_API_OK;
 }
 
-MSDLL rx_stream * device::rx_create_stream(uint8_t ch_ids) {
+MSDLL rx_stream * device::rx_stream_create(uint8_t ch_ids) {
     return new rx_stream(*this, ch_ids);
 }
 
