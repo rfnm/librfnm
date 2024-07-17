@@ -628,6 +628,9 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
 
     rx_stream_count++;
 
+    // no need to start workers if they're already running
+    if (rx_stream_count > 1) return ret;
+
     // allocate buffers if the user didn't allocate them themselves
     if (!rx_s.qbuf_cnt) {
         rx_buffers_allocated = true;
