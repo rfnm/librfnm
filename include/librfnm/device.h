@@ -198,7 +198,7 @@ namespace rfnm {
 
         MSDLL rfnm_api_failcode get(enum req_type type);
 
-        MSDLL rfnm_api_failcode set(uint16_t applies, bool confirm_execution = true, uint32_t wait_for_ms = 1000);
+        MSDLL rfnm_api_failcode set(uint16_t applies, bool confirm_execution = true, uint32_t timeout_us = 1000000);
 
         MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t *bufsize);
 
@@ -209,13 +209,13 @@ namespace rfnm {
         MSDLL rfnm_api_failcode rx_stream_start();
         MSDLL rfnm_api_failcode rx_stream_stop();
         MSDLL rfnm_api_failcode rx_qbuf(struct rx_buf* buf, bool new_buffer = false);
-        MSDLL rfnm_api_failcode rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids = 0, uint32_t wait_for_ms = 20);
-        MSDLL rfnm_api_failcode rx_flush(uint32_t wait_for_ms = 20, uint8_t ch_ids = 0xFF);
+        MSDLL rfnm_api_failcode rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids = 0, uint32_t timeout_us = 20000);
+        MSDLL rfnm_api_failcode rx_flush(uint32_t timeout_us = 20000, uint8_t ch_ids = 0xFF);
 
         // Low level TX stream API
         MSDLL rfnm_api_failcode tx_stream_start(enum tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
         MSDLL rfnm_api_failcode tx_stream_stop();
-        MSDLL rfnm_api_failcode tx_qbuf(struct tx_buf* buf, uint32_t wait_for_ms = 20);
+        MSDLL rfnm_api_failcode tx_qbuf(struct tx_buf* buf, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode tx_dqbuf(struct tx_buf** buf);
 
         // RF path (antenna) name conversion

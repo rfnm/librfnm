@@ -699,7 +699,7 @@ MSDLL rfnm_api_failcode device::rx_qbuf(struct rx_buf * buf, bool new_buffer) {
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t wait_for_ms) {
+MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us) {
     //std::lock_guard<std::mutex> lockGuard1(tx_s.cc_mutex);
     std::lock_guard<std::mutex> lockGuard1(s_dev_status_mutex);
 
@@ -820,7 +820,7 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
 }
 
-MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, uint32_t wait_for_ms) {
+MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, uint32_t timeout_us) {
     int is_single_ch, required_adc_id;
 
     if (rx_s.qbuf_cnt < LIBRFNM_MIN_RX_BUFCNT) {
@@ -862,20 +862,20 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, u
     }
 
     if(!dqbuf_is_cc_continuous(required_adc_id, 1)) {
-        if (!wait_for_ms) {
+        if (!timeout_us) {
             return RFNM_API_DQBUF_NO_DATA;
         }
 
         {
             std::unique_lock lk(rx_s.out_mutex);
-            rx_s.cv.wait_for(lk, std::chrono::milliseconds(wait_for_ms),
+            rx_s.cv.wait_for(lk, std::chrono::microseconds(timeout_us),
                 [this, required_adc_id] { return dqbuf_is_cc_continuous(required_adc_id, 0) ||
                                 rx_s.out[required_adc_id].size() > LIBRFNM_RX_RECOMB_BUF_LEN; }
             );
         }
 
         if (!dqbuf_is_cc_continuous(required_adc_id, 1)) {
-            if (wait_for_ms >= 10) {
+            if (timeout_us >= 10000) {
                 spdlog::info("cc timeout {} adc {}", rx_s.usb_cc[required_adc_id], required_adc_id);
             }
 
@@ -904,8 +904,8 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, u
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode device::rx_flush(uint32_t wait_for_ms, uint8_t ch_ids) {
-    std::this_thread::sleep_for(std::chrono::milliseconds(wait_for_ms));
+MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
+    std::this_thread::sleep_for(std::chrono::microseconds(timeout_us));
 
     for (int ch_id = 0; ch_id < 8; ch_id++) {
         if (!(ch_ids & (1 << ch_id))) continue;
@@ -1053,7 +1053,7 @@ MSDLL rfnm_api_failcode device::get(enum req_type type) {
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, uint32_t wait_for_ms) {
+MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, uint32_t timeout_us) {
     int r;
     uint8_t applies_ch_tx = applies & 0xff;
     uint8_t applies_ch_rx = (applies & 0xff00) >> 8;
@@ -1090,7 +1090,7 @@ MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, ui
         using std::chrono::high_resolution_clock;
         using std::chrono::duration_cast;
         using std::chrono::duration;
-        using std::chrono::milliseconds;
+        using std::chrono::microseconds;
 
         auto tstart = high_resolution_clock::now();
 
@@ -1119,9 +1119,9 @@ MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, ui
             }
 
             auto tnow = high_resolution_clock::now();
-            auto ms_int = duration_cast<milliseconds>(tnow - tstart);
+            auto us_int = duration_cast<microseconds>(tnow - tstart);
 
-            if (ms_int.count() > wait_for_ms) {
+            if (us_int.count() > timeout_us) {
                 return RFNM_API_TIMEOUT;
             }
         }
