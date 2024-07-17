@@ -623,7 +623,7 @@ MSDLL rx_stream * device::rx_stream_create(uint8_t ch_ids) {
     return new rx_stream(*this, ch_ids);
 }
 
-MSDLL rfnm_api_failcode device::rx_stream_start() {
+MSDLL rfnm_api_failcode device::rx_work_start() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
     rx_stream_count++;
@@ -654,7 +654,7 @@ MSDLL rfnm_api_failcode device::rx_stream_start() {
     return ret;
 }
 
-MSDLL rfnm_api_failcode device::rx_stream_stop() {
+MSDLL rfnm_api_failcode device::rx_work_stop() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
     if (rx_stream_count > 0) rx_stream_count--;
@@ -669,7 +669,7 @@ MSDLL rfnm_api_failcode device::rx_stream_stop() {
     return ret;
 }
 
-MSDLL rfnm_api_failcode device::tx_stream_start(enum tx_latency_policy policy) {
+MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
     rfnm_api_failcode ret = RFNM_API_OK;
 
     for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
@@ -681,7 +681,7 @@ MSDLL rfnm_api_failcode device::tx_stream_start(enum tx_latency_policy policy) {
     return ret;
 }
 
-MSDLL rfnm_api_failcode device::tx_stream_stop() {
+MSDLL rfnm_api_failcode device::tx_work_stop() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
     for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {

@@ -206,15 +206,15 @@ namespace rfnm {
         MSDLL rx_stream * rx_stream_create(uint8_t ch_ids);
 
         // Low level RX stream API
-        MSDLL rfnm_api_failcode rx_stream_start();
-        MSDLL rfnm_api_failcode rx_stream_stop();
+        MSDLL rfnm_api_failcode rx_work_start();
+        MSDLL rfnm_api_failcode rx_work_stop();
         MSDLL rfnm_api_failcode rx_qbuf(struct rx_buf* buf, bool new_buffer = false);
         MSDLL rfnm_api_failcode rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids = 0, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode rx_flush(uint32_t timeout_us = 20000, uint8_t ch_ids = 0xFF);
 
         // Low level TX stream API
-        MSDLL rfnm_api_failcode tx_stream_start(enum tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
-        MSDLL rfnm_api_failcode tx_stream_stop();
+        MSDLL rfnm_api_failcode tx_work_start(enum tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
+        MSDLL rfnm_api_failcode tx_work_stop();
         MSDLL rfnm_api_failcode tx_qbuf(struct tx_buf* buf, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode tx_dqbuf(struct tx_buf** buf);
 

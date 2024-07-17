@@ -76,7 +76,7 @@ static void applyQuadDcOffset(T *buf, size_t n, const T *offsets) {
 MSDLL rfnm_api_failcode rx_stream::activate() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
-    dev.rx_stream_start();
+    dev.rx_work_start();
     stream_active = true;
 
     uint16_t apply_mask = 0;
@@ -175,7 +175,7 @@ MSDLL rfnm_api_failcode rx_stream::deactivate() {
     if (!stream_active) return ret;
 
     // stop the receiver threads
-    dev.rx_stream_stop();
+    dev.rx_work_stop();
     stream_active = false;
 
     // stop the ADCs
