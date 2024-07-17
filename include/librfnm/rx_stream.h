@@ -28,10 +28,10 @@ namespace rfnm {
         MSDLL void set_auto_dc_offset(bool enabled, uint8_t ch_ids = 0xFF);
 
         MSDLL rfnm_api_failcode read(void * const * buffs, size_t elems_to_read,
-            size_t &elems_read, uint64_t &timestamp_ns, uint32_t wait_for_ms=20);
+            size_t &elems_read, uint64_t &timestamp_ns, uint32_t timeout_us=20000);
 
     private:
-        rfnm_api_failcode rx_dqbuf_multi(uint32_t wait_for_ms);
+        rfnm_api_failcode rx_dqbuf_multi(uint32_t timeout_us);
         void rx_qbuf_multi();
 
         device &dev;

@@ -204,10 +204,10 @@ MSDLL void rx_stream::set_auto_dc_offset(bool enabled, uint8_t channel_mask) {
 }
 
 MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_read,
-        size_t &elems_read, uint64_t &timestamp_ns, uint32_t wait_for_ms) {
+        size_t &elems_read, uint64_t &timestamp_ns, uint32_t timeout_us) {
     rfnm_api_failcode ret = RFNM_API_OK;
 
-    auto timeout = std::chrono::system_clock::now() + std::chrono::milliseconds(wait_for_ms);
+    auto timeout = std::chrono::system_clock::now() + std::chrono::microseconds(timeout_us);
     size_t bytes_per_ele = dev.s->transport_status.rx_stream_format;
     size_t read_elems[MAX_RX_CHAN_COUNT] = {};
     size_t buf_idx = 0;
@@ -382,9 +382,9 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
 
 // only return data once a buffer has been dequeued from every active channel
 // TODO: handle dropped/skipped buffers that could result in channel desync
-rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t wait_for_ms) {
+rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us) {
     rfnm_api_failcode ret = RFNM_API_OK;
-    auto timeout = std::chrono::system_clock::now() + std::chrono::milliseconds(wait_for_ms);
+    auto timeout = std::chrono::system_clock::now() + std::chrono::microseconds(timeout_us);
 
     for (unsigned int channel : channels) {
         if (pending_rx_buf[channel]) continue;
