@@ -174,7 +174,7 @@ RFNM_PACKED_STRUCT(
 	struct rfnm_m7_status {
 	uint32_t tx_buf_id;
 	uint32_t rx_head;
-	uint32_t kernel_cache_flush_tail; // this variable shouldn't be here, but it's already mapped ... 
+	uint32_t kernel_cache_flush_tail; // this variable shouldn't be here, but it's already mapped ...
 }
 );
 

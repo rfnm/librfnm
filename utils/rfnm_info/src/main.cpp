@@ -1,5 +1,5 @@
 #include <stdio.h>
-#include <librfnm/librfnm.h>
+#include <librfnm/device.h>
 
 void dumpHwInfo(const rfnm_dev_hwinfo_bit& info, bool daughterboard, int offset = 0) {
     // Create offset string
@@ -24,7 +24,7 @@ int main() {
     // List all available devices
     std::vector<rfnm_dev_hwinfo> list;
     try {
-        list = librfnm::find(librfnm_transport::LIBRFNM_TRANSPORT_USB);
+        list = rfnm::device::find(rfnm::transport::LIBRFNM_TRANSPORT_USB);
     }
     catch (const std::exception& e) {
         fprintf(stderr, "Failed to list devices: %s\n", e.what());
@@ -67,7 +67,7 @@ int main() {
         catch (const std::exception& e) {
             fprintf(stderr, "Failed to query device info: %s\n", e.what());
         }
-        
+
         // Space
         printf("\n");
     }
