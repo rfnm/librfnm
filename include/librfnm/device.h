@@ -187,6 +187,8 @@ namespace rfnm {
 
     struct _usb_handle;
 
+    class rx_stream;
+
     class device {
     public:
         MSDLL explicit device(enum transport transport, std::string address = "", enum debug_level dbg = LIBRFNM_DEBUG_NONE);
@@ -200,26 +202,24 @@ namespace rfnm {
 
         MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t *bufsize);
 
+        // High level stream API
+        MSDLL rx_stream * rx_create_stream(uint8_t ch_ids);
+
+        // Low level RX stream API
         MSDLL rfnm_api_failcode rx_stream();
-
         MSDLL rfnm_api_failcode rx_stream_stop();
-
         MSDLL rfnm_api_failcode rx_qbuf(struct rx_buf* buf, bool new_buffer = false);
-
         MSDLL rfnm_api_failcode rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids = 0, uint32_t wait_for_ms = 20);
-
         MSDLL rfnm_api_failcode rx_flush(uint32_t wait_for_ms = 20, uint8_t ch_ids = 0xFF);
 
+        // Low level TX stream API
         MSDLL rfnm_api_failcode tx_stream(enum tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
-
         MSDLL rfnm_api_failcode tx_stream_stop();
-
         MSDLL rfnm_api_failcode tx_qbuf(struct tx_buf* buf, uint32_t wait_for_ms = 20);
-
         MSDLL rfnm_api_failcode tx_dqbuf(struct tx_buf** buf);
 
+        // RF path (antenna) name conversion
         MSDLL static enum rfnm_rf_path string_to_rf_path(std::string path);
-
         MSDLL static std::string rf_path_to_string(enum rfnm_rf_path path);
 
         struct status* s = nullptr;

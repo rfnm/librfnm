@@ -1,4 +1,5 @@
 #include <librfnm/device.h>
+#include <librfnm/rx_stream.h>
 #include <spdlog/spdlog.h>
 #include <libusb-1.0/libusb.h>
 
@@ -616,6 +617,10 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
     }
 
     return RFNM_API_OK;
+}
+
+MSDLL rx_stream * device::rx_create_stream(uint8_t ch_ids) {
+    return new rfnm::rx_stream(*this, ch_ids);
 }
 
 MSDLL rfnm_api_failcode device::rx_stream() {
