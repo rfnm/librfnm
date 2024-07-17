@@ -253,5 +253,6 @@ namespace rfnm {
 
         int rx_stream_count = 0;
         bool rx_buffers_allocated = false;
+        bool stream_format_locked = false;
     };
 }

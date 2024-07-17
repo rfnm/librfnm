@@ -602,7 +602,7 @@ exit:
 }
 
 MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, size_t *bufsize) {
-    if (rx_s.qbuf_cnt) {
+    if (stream_format_locked) {
         if (bufsize) {
             *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
         }
@@ -630,6 +630,7 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
 }
 
 MSDLL rx_stream * device::rx_stream_create(uint8_t ch_ids) {
+    stream_format_locked = true;
     return new rx_stream(*this, ch_ids);
 }
 
@@ -640,6 +641,8 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
 
     // no need to start workers if they're already running
     if (rx_stream_count > 1) return ret;
+
+    stream_format_locked = true;
 
     // allocate buffers if the user didn't allocate them themselves
     if (!rx_s.qbuf_cnt) {
