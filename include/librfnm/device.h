@@ -203,7 +203,7 @@ namespace rfnm {
         MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t *bufsize);
 
         // High level stream API
-        MSDLL rx_stream * rx_create_stream(uint8_t ch_ids);
+        MSDLL rx_stream * rx_stream_create(uint8_t ch_ids);
 
         // Low level RX stream API
         MSDLL rfnm_api_failcode rx_stream_start();
