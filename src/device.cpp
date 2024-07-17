@@ -27,6 +27,10 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
     std::vector<struct rfnm_dev_hwinfo> found;
     libusb_device** devs = NULL;
 
+    // set default/native stream format
+    s->transport_status.rx_stream_format = LIBRFNM_STREAM_FORMAT_CS16;
+    s->transport_status.tx_stream_format = LIBRFNM_STREAM_FORMAT_CS16;
+
 #if LIBUSB_API_VERSION >= 0x0100010A
     r = libusb_init_context(nullptr, nullptr, 0);
 #else
@@ -599,7 +603,9 @@ exit:
 
 MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, size_t *bufsize) {
     if (rx_s.qbuf_cnt) {
-        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
+        if (bufsize) {
+            *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
+        }
         return RFNM_API_NOT_SUPPORTED;
     }
 
@@ -609,10 +615,14 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
     case LIBRFNM_STREAM_FORMAT_CF32:
         s->transport_status.rx_stream_format = format;
         s->transport_status.tx_stream_format = format;
-        *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
+        if (bufsize) {
+            *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
+        }
         break;
     default:
-        *bufsize = 0;
+        if (bufsize) {
+            *bufsize = 0;
+        }
         return RFNM_API_NOT_SUPPORTED;
     }
 
