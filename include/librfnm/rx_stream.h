@@ -2,9 +2,9 @@
 
 #include "device.h"
 
-#define MAX_RX_CHAN_COUNT 4
-
 namespace rfnm {
+    const size_t MAX_RX_CHAN_COUNT = 4;
+
     struct partial_buf {
         uint8_t* buf;
         uint32_t left;
