@@ -1,0 +1,86 @@
+name: Build Binaries
+
+on:
+    push:
+        branches-ignore:
+        - nightly
+    pull_request:
+        branches-ignore:
+        - nightly
+
+env:
+    # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+    BUILD_TYPE: Release
+
+jobs:
+    build_windows:
+        runs-on: windows-latest
+
+        steps:
+        - uses: actions/checkout@v4
+        
+        - name: Create Build Environment
+          run: cmake -E make_directory ${{runner.workspace}}/build
+
+        - name: Install dependencies
+          run: vcpkg install libusb:x64-windows spdlog:x64-windows
+
+        - name: Prepare CMake
+          working-directory: ${{runner.workspace}}/build
+          run: cmake "$Env:GITHUB_WORKSPACE" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake"
+
+        - name: Build
+          working-directory: ${{runner.workspace}}/build
+          run: cmake --build . --config Release --verbose
+
+        - name: Install
+          working-directory: ${{runner.workspace}}/build
+          run: cmake --install . --config Release --verbose
+    
+    build_linux:
+        runs-on: ubuntu-latest
+
+        steps:
+        - uses: actions/checkout@v4
+
+        - name: Create Build Environment
+          run: cmake -E make_directory ${{runner.workspace}}/build
+
+        - name: Install dependencies
+          run: sudo apt update && sudo apt install libspdlog-dev libusb-1.0-0-dev
+        
+        - name: Prepare CMake
+          working-directory: ${{runner.workspace}}/build
+          run: cmake $GITHUB_WORKSPACE
+
+        - name: Build
+          working-directory: ${{runner.workspace}}/build
+          run: make
+
+        - name: Install
+          working-directory: ${{runner.workspace}}/build
+          run: sudo make install
+    
+    build_macos:
+        runs-on: macos-latest
+
+        steps:
+        - uses: actions/checkout@v4
+        
+        - name: Create Build Environment
+          run: cmake -E make_directory ${{runner.workspace}}/build
+
+        - name: Install dependencies
+          run: brew install pkg-config libusb spdlog
+
+        - name: Prepare CMake
+          working-directory: ${{runner.workspace}}/build
+          run: cmake $GITHUB_WORKSPACE
+
+        - name: Build
+          working-directory: ${{runner.workspace}}/build
+          run: make VERBOSE=1
+
+        - name: Install
+          working-directory: ${{runner.workspace}}/build
+          run: sudo make install
