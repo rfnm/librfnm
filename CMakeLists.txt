@@ -40,6 +40,23 @@ function(configure_rfnm_target target)
     # Set C++ standard to C++17
     target_compile_features(${target} PUBLIC cxx_std_17)
 
+    # Set optimisation flags
+    if (${CMAKE_BUILD_TYPE} MATCHES "Debug")
+        # Debug Flags
+        if (MSVC)
+            target_compile_options(${target} PRIVATE /EHsc)
+        else ()
+            target_compile_options(${target} PRIVATE -g -Og)
+        endif ()
+    else()
+        # Normal Flags
+        if (MSVC)
+            target_compile_options(${target} PRIVATE /O2 /Ob2 /EHsc)
+        else ()
+            target_compile_options(${target} PRIVATE -O3)
+        endif ()
+    endif()
+
     # Include the include folder
     target_include_directories(${target} PUBLIC "include/")
 
