@@ -122,6 +122,8 @@ namespace rfnm {
         MSDLL const struct transport_status * get_transport_status();
         MSDLL const struct rfnm_api_rx_ch * get_rx_channel(uint32_t channel);
         MSDLL const struct rfnm_api_tx_ch * get_tx_channel(uint32_t channel);
+        MSDLL uint32_t get_rx_channel_count();
+        MSDLL uint32_t get_tx_channel_count();
 
         // General setters
         MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t *bufsize);

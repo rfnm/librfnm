@@ -1389,3 +1389,12 @@ MSDLL rfnm_api_failcode device::set_tx_channel_path(uint32_t channel, enum rfnm_
         return RFNM_API_NOT_SUPPORTED;
     }
 }
+
+
+MSDLL uint32_t device::get_rx_channel_count() {
+    return s->hwinfo.daughterboard[0].rx_ch_cnt + s->hwinfo.daughterboard[1].rx_ch_cnt;
+}
+
+MSDLL uint32_t device::get_tx_channel_count() {
+    return s->hwinfo.daughterboard[0].tx_ch_cnt + s->hwinfo.daughterboard[1].tx_ch_cnt;
+}
