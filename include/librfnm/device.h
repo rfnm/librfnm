@@ -127,7 +127,6 @@ namespace rfnm {
         MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t *bufsize);
 
         // RX channel setters
-        MSDLL rfnm_api_failcode set_rx_channel_active(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = true);
         MSDLL rfnm_api_failcode set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
         MSDLL rfnm_api_failcode set_rx_channel_freq(uint32_t channel, int64_t freq, bool apply = true);
         MSDLL rfnm_api_failcode set_rx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = true);
@@ -140,7 +139,6 @@ namespace rfnm {
         // not exposing setter for data_type because this library only handles complex samples for now
 
         // TX channel setters
-        MSDLL rfnm_api_failcode set_tx_channel_active(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = true);
         MSDLL rfnm_api_failcode set_tx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
         MSDLL rfnm_api_failcode set_tx_channel_freq(uint32_t channel, int64_t freq, bool apply = true);
         MSDLL rfnm_api_failcode set_tx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = true);
@@ -158,12 +156,14 @@ namespace rfnm {
         MSDLL rfnm_api_failcode rx_qbuf(struct rx_buf* buf, bool new_buffer = false);
         MSDLL rfnm_api_failcode rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids = 0, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode rx_flush(uint32_t timeout_us = 20000, uint8_t ch_ids = 0xFF);
+        MSDLL rfnm_api_failcode set_rx_channel_active(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = true);
 
         // Low level TX stream API
         MSDLL rfnm_api_failcode tx_work_start(enum tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
         MSDLL rfnm_api_failcode tx_work_stop();
         MSDLL rfnm_api_failcode tx_qbuf(struct tx_buf* buf, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode tx_dqbuf(struct tx_buf** buf);
+        MSDLL rfnm_api_failcode set_tx_channel_active(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = true);
 
         // RF path (antenna) name conversion
         MSDLL static enum rfnm_rf_path string_to_rf_path(std::string path);
