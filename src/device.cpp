@@ -736,7 +736,7 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
 
 MSDLL int device::single_ch_id_bitmap_to_adc_id(uint8_t ch_ids) {
     int ch_id = 0;
-    while (ch_id < 8) {
+    while (ch_id < MAX_RX_CHANNELS) {
         if ((ch_ids & 0x1) == 1) {
             return s->rx.ch[ch_id].adc_id;
         }
@@ -868,7 +868,7 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, u
     }
     else {
         do {
-            uint8_t mask = (1 << last_dqbuf_ch);
+            uint8_t mask = channel_flags[last_dqbuf_ch];
             required_adc_id = single_ch_id_bitmap_to_adc_id(ch_ids & mask);
 
             if (++last_dqbuf_ch == 8) {
@@ -923,8 +923,8 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, u
 MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
     std::this_thread::sleep_for(std::chrono::microseconds(timeout_us));
 
-    for (int ch_id = 0; ch_id < 8; ch_id++) {
-        if (!(ch_ids & (1 << ch_id))) continue;
+    for (int ch_id = 0; ch_id < MAX_RX_CHANNELS; ch_id++) {
+        if (!(ch_ids & channel_flags[ch_id])) continue;
 
         int adc_id = s->rx.ch[ch_id].adc_id;
 
@@ -1121,13 +1121,13 @@ MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, ui
             }
 
             if (r_res.cc_rx == cc_rx && r_res.cc_tx == cc_tx) {
-                for (int q = 0; q < 8; q++) {
-                    if (((1 << q) & applies_ch_tx) && r_res.tx_ecodes[q]) {
+                for (int q = 0; q < MAX_TX_CHANNELS; q++) {
+                    if ((channel_flags[q] & applies_ch_tx) && r_res.tx_ecodes[q]) {
                         return (rfnm_api_failcode) r_res.tx_ecodes[q];
                     }
                 }
-                for (int q = 0; q < 8; q++) {
-                    if (((1 << q) & applies_ch_rx) && r_res.rx_ecodes[q]) {
+                for (int q = 0; q < MAX_RX_CHANNELS; q++) {
+                    if ((channel_flags[q] & applies_ch_rx) && r_res.rx_ecodes[q]) {
                         return (rfnm_api_failcode) r_res.rx_ecodes[q];
                     }
                 }
@@ -1144,4 +1144,248 @@ MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, ui
     }
 
     return RFNM_API_OK;
+}
+
+MSDLL const struct rfnm_dev_hwinfo * device::get_hwinfo() {
+    return &(s->hwinfo);
+}
+
+MSDLL const struct rfnm_dev_status * device::get_dev_status() {
+    return &(s->dev_status);
+}
+
+MSDLL const struct transport_status * device::get_transport_status() {
+    return &(s->transport_status);
+}
+
+MSDLL const struct rfnm_api_rx_ch * device::get_rx_channel(uint32_t channel) {
+    if (channel < MAX_RX_CHANNELS) {
+        return &(s->rx.ch[channel]);
+    } else {
+        return nullptr;
+    }
+}
+
+MSDLL const struct rfnm_api_tx_ch * device::get_tx_channel(uint32_t channel) {
+    if (channel < MAX_RX_CHANNELS) {
+        return &(s->tx.ch[channel]);
+    } else {
+        return nullptr;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_rx_channel_active(uint32_t channel, enum rfnm_ch_enable enable,
+        enum rfnm_ch_stream stream, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].enable = enable;
+        s->rx.ch[channel].stream = stream;
+
+        if (apply) {
+            return set(rx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].samp_freq_div_m = m;
+        s->rx.ch[channel].samp_freq_div_n = n;
+
+        if (apply) {
+            return set(rx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_rx_channel_freq(uint32_t channel, int64_t freq, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].freq = freq;
+
+        if (apply) {
+            return set(rx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_rx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].rfic_lpf_bw = bw;
+
+        if (apply) {
+            return set(rx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_rx_channel_gain(uint32_t channel, int8_t gain, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].gain = gain;
+
+        if (apply) {
+            return set(rx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_rx_channel_agc(uint32_t channel, enum rfnm_agc_type agc, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].agc = agc;
+
+        if (apply) {
+            return set(rx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_rx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].bias_tee = bias_tee;
+
+        if (apply) {
+            return set(rx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_rx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].path = path;
+
+        if (apply) {
+            return set(rx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_tx_channel_active(uint32_t channel, enum rfnm_ch_enable enable,
+        enum rfnm_ch_stream stream, bool apply) {
+    if (channel < MAX_TX_CHANNELS) {
+        s->tx.ch[channel].enable = enable;
+        s->tx.ch[channel].stream = stream;
+
+        if (apply) {
+            return set(tx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_tx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply)  {
+    if (channel < MAX_TX_CHANNELS) {
+        s->tx.ch[channel].samp_freq_div_n = n;
+        s->tx.ch[channel].samp_freq_div_m = m;
+
+        if (apply) {
+            return set(tx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_tx_channel_freq(uint32_t channel, int64_t freq, bool apply) {
+    if (channel < MAX_TX_CHANNELS) {
+        s->tx.ch[channel].freq = freq;
+
+        if (apply) {
+            return set(tx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_tx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply) {
+    if (channel < MAX_TX_CHANNELS) {
+        s->tx.ch[channel].rfic_lpf_bw = bw;
+
+        if (apply) {
+            return set(tx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_tx_channel_power(uint32_t channel, int8_t power, bool apply) {
+    if (channel < MAX_TX_CHANNELS) {
+        s->tx.ch[channel].power = power;
+
+        if (apply) {
+            return set(tx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_tx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply) {
+    if (channel < MAX_TX_CHANNELS) {
+        s->tx.ch[channel].bias_tee = bias_tee;
+
+        if (apply) {
+            return set(tx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_tx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply) {
+    if (channel < MAX_TX_CHANNELS) {
+        s->tx.ch[channel].path = path;
+
+        if (apply) {
+            return set(tx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
 }
