@@ -66,7 +66,7 @@ else ()
 endif ()
 
 # Configure pkgconfig file
-configure_file(${CMAKE_SOURCE_DIR}/librfnm.pc.in ${CMAKE_CURRENT_BINARY_DIR}/librfnm.pc @ONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/librfnm.pc.in ${CMAKE_CURRENT_BINARY_DIR}/librfnm.pc @ONLY)
 
 # Install pkgconfig file
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/librfnm.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
@@ -75,7 +75,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/librfnm.pc DESTINATION ${CMAKE_INSTALL
 install(TARGETS rfnm_static rfnm)
 
 # Install the headers
-install(DIRECTORY ${CMAKE_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 # On Windows, install dependencies
 if (MSVC)
@@ -86,7 +86,7 @@ endif ()
 
 # Install UDEV rules
 if (LINUX AND INSTALL_UDEV_RULES)
-    install(FILES ${CMAKE_SOURCE_DIR}/rfnm.rules DESTINATION ${CMAKE_INSTALL_LIBDIR}/udev/rules.d)
+    install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/rfnm.rules DESTINATION ${CMAKE_INSTALL_LIBDIR}/udev/rules.d)
 endif ()
 
 # Build utils if enabled
@@ -95,5 +95,5 @@ if (BUILD_RFNM_UTILS)
 endif ()
 
 # Create uninstall target
-configure_file(${CMAKE_SOURCE_DIR}/cmake_uninstall.cmake ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake @ONLY)
+configure_file(${CMAKE_CURRENT_SOURCE_DIR}/cmake_uninstall.cmake ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake @ONLY)
 add_custom_target(uninstall ${CMAKE_COMMAND} -P ${CMAKE_CURRENT_BINARY_DIR}/cmake_uninstall.cmake)
