@@ -11,10 +11,8 @@
 #include "rfnm_fw_api.h"
 
 #if defined(__GNUC__)
-#define RFNM_PACKED_STRUCT( __Declaration__ ) __Declaration__ __attribute__((__packed__))
 #define MSDLL
 #elif defined(_MSC_VER)
-#define RFNM_PACKED_STRUCT( __Declaration__ ) __pragma(pack(push,1)) __Declaration__ __pragma(pack(pop))
 #define MSDLL __declspec(dllexport)
 #endif
 
@@ -29,38 +27,71 @@
 #define LIBRFNM_MIN_RX_BUFCNT 1000
 #define LIBRFNM_RX_RECOMB_BUF_LEN (100)
 
-#define LIBRFNM_CH0 (0x1 << 0)
-#define LIBRFNM_CH1 (0x1 << 1)
-#define LIBRFNM_CH2 (0x1 << 2)
-#define LIBRFNM_CH3 (0x1 << 3)
-#define LIBRFNM_CH4 (0x1 << 4)
-#define LIBRFNM_CH5 (0x1 << 5)
-#define LIBRFNM_CH6 (0x1 << 6)
-#define LIBRFNM_CH7 (0x1 << 7)
-
-#define LIBRFNM_APPLY_CH0_TX (0x1 << 0)
-#define LIBRFNM_APPLY_CH1_TX (0x1 << 1)
-#define LIBRFNM_APPLY_CH2_TX (0x1 << 2)
-#define LIBRFNM_APPLY_CH3_TX (0x1 << 3)
-#define LIBRFNM_APPLY_CH4_TX (0x1 << 4)
-#define LIBRFNM_APPLY_CH5_TX (0x1 << 5)
-#define LIBRFNM_APPLY_CH6_TX (0x1 << 6)
-#define LIBRFNM_APPLY_CH7_TX (0x1 << 7)
-
-#define LIBRFNM_APPLY_CH0_RX ((0x1 << 0) << 8)
-#define LIBRFNM_APPLY_CH1_RX ((0x1 << 1) << 8)
-#define LIBRFNM_APPLY_CH2_RX ((0x1 << 2) << 8)
-#define LIBRFNM_APPLY_CH3_RX ((0x1 << 3) << 8)
-#define LIBRFNM_APPLY_CH4_RX ((0x1 << 4) << 8)
-#define LIBRFNM_APPLY_CH5_RX ((0x1 << 5) << 8)
-#define LIBRFNM_APPLY_CH6_RX ((0x1 << 6) << 8)
-#define LIBRFNM_APPLY_CH7_RX ((0x1 << 7) << 8)
-
 #define RFNM_MHZ_TO_HZ(MHz) (MHz * 1000 * 1000ul)
 #define RFNM_HZ_TO_MHZ(Hz) (Hz / (1000ul * 1000ul))
 #define RFNM_HZ_TO_KHZ(Hz) (Hz / 1000ul)
 
 namespace rfnm {
+    const uint32_t MAX_RX_CHANNELS = 8;
+    const uint32_t MAX_TX_CHANNELS = 1;
+
+    enum channel {
+        LIBRFNM_CH0 = (0x1 << 0),
+        LIBRFNM_CH1 = (0x1 << 1),
+        LIBRFNM_CH2 = (0x1 << 2),
+        LIBRFNM_CH3 = (0x1 << 3),
+        LIBRFNM_CH4 = (0x1 << 4),
+        LIBRFNM_CH5 = (0x1 << 5),
+        LIBRFNM_CH6 = (0x1 << 6),
+        LIBRFNM_CH7 = (0x1 << 7)
+    };
+
+    enum channel_apply {
+        LIBRFNM_APPLY_CH0_TX = (0x1 << 0),
+        LIBRFNM_APPLY_CH1_TX = (0x1 << 1),
+        LIBRFNM_APPLY_CH2_TX = (0x1 << 2),
+        LIBRFNM_APPLY_CH3_TX = (0x1 << 3),
+        LIBRFNM_APPLY_CH4_TX = (0x1 << 4),
+        LIBRFNM_APPLY_CH5_TX = (0x1 << 5),
+        LIBRFNM_APPLY_CH6_TX = (0x1 << 6),
+        LIBRFNM_APPLY_CH7_TX = (0x1 << 7),
+        LIBRFNM_APPLY_CH0_RX = ((0x1 << 0) << 8),
+        LIBRFNM_APPLY_CH1_RX = ((0x1 << 1) << 8),
+        LIBRFNM_APPLY_CH2_RX = ((0x1 << 2) << 8),
+        LIBRFNM_APPLY_CH3_RX = ((0x1 << 3) << 8),
+        LIBRFNM_APPLY_CH4_RX = ((0x1 << 4) << 8),
+        LIBRFNM_APPLY_CH5_RX = ((0x1 << 5) << 8),
+        LIBRFNM_APPLY_CH6_RX = ((0x1 << 6) << 8),
+        LIBRFNM_APPLY_CH7_RX = ((0x1 << 7) << 8)
+    };
+
+    static const uint8_t channel_flags[MAX_RX_CHANNELS] = {
+        LIBRFNM_CH0,
+        LIBRFNM_CH1,
+        LIBRFNM_CH2,
+        LIBRFNM_CH3,
+        LIBRFNM_CH4,
+        LIBRFNM_CH5,
+        LIBRFNM_CH6,
+        LIBRFNM_CH7
+    };
+
+    static const uint16_t rx_channel_apply_flags[MAX_RX_CHANNELS] = {
+        LIBRFNM_APPLY_CH0_RX,
+        LIBRFNM_APPLY_CH1_RX,
+        LIBRFNM_APPLY_CH2_RX,
+        LIBRFNM_APPLY_CH3_RX,
+        LIBRFNM_APPLY_CH4_RX,
+        LIBRFNM_APPLY_CH5_RX,
+        LIBRFNM_APPLY_CH6_RX,
+        LIBRFNM_APPLY_CH7_RX
+    };
+
+    static const uint16_t tx_channel_apply_flags[MAX_TX_CHANNELS] = {
+        LIBRFNM_APPLY_CH0_TX
+    };
+
+
     enum transport {
         LIBRFNM_TRANSPORT_LOCAL,
         LIBRFNM_TRANSPORT_USB,
@@ -118,31 +149,23 @@ namespace rfnm {
         struct rfnm_dev_status dev_status;
 
         std::chrono::time_point<std::chrono::high_resolution_clock> last_dev_time;
-        //std::mutex dev_status_mutex;
     };
 
-    RFNM_PACKED_STRUCT(
-        struct rx_buf {
-            uint8_t* buf;
-            uint32_t phytimer;
-            uint32_t adc_cc;
-            uint64_t usb_cc;
-            uint32_t adc_id;
-            //bool operator<(const rx_buf * lrb) const {
-            //    return usb_cc < lrb->usb_cc;
-            //}
-        }
-    );
+    struct rx_buf {
+        uint8_t* buf;
+        uint32_t phytimer;
+        uint32_t adc_cc;
+        uint64_t usb_cc;
+        uint32_t adc_id;
+    };
 
-    RFNM_PACKED_STRUCT(
-        struct tx_buf {
-            uint8_t* buf;
-            uint32_t phytimer;
-            uint32_t dac_cc;
-            uint64_t usb_cc;
-            uint32_t dac_id;
-        }
-    );
+    struct tx_buf {
+        uint8_t* buf;
+        uint32_t phytimer;
+        uint32_t dac_cc;
+        uint64_t usb_cc;
+        uint32_t dac_id;
+    };
 
     class rx_buf_compare {
     public:
@@ -200,7 +223,38 @@ namespace rfnm {
 
         MSDLL rfnm_api_failcode set(uint16_t applies, bool confirm_execution = true, uint32_t timeout_us = 1000000);
 
+        // Getters
+        MSDLL const struct rfnm_dev_hwinfo * get_hwinfo();
+        MSDLL const struct rfnm_dev_status * get_dev_status();
+        MSDLL const struct transport_status * get_transport_status();
+        MSDLL const struct rfnm_api_rx_ch * get_rx_channel(uint32_t channel);
+        MSDLL const struct rfnm_api_tx_ch * get_tx_channel(uint32_t channel);
+
+        // General setters
         MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t *bufsize);
+
+        // RX channel setters
+        MSDLL rfnm_api_failcode set_rx_channel_active(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = true);
+        MSDLL rfnm_api_failcode set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
+        MSDLL rfnm_api_failcode set_rx_channel_freq(uint32_t channel, int64_t freq, bool apply = true);
+        MSDLL rfnm_api_failcode set_rx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = true);
+        MSDLL rfnm_api_failcode set_rx_channel_gain(uint32_t channel, int8_t gain, bool apply = true);
+        // not exposing setter for rfic_dc_i and rfic_dc_q because that functionality will need to change
+        // use the stream class for ADC interleaving aware DC offset removal instead
+        MSDLL rfnm_api_failcode set_rx_channel_agc(uint32_t channel, enum rfnm_agc_type agc, bool apply = true);
+        MSDLL rfnm_api_failcode set_rx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply = true);
+        MSDLL rfnm_api_failcode set_rx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply = true);
+        // not exposing setter for data_type because this library only handles complex samples for now
+
+        // TX channel setters
+        MSDLL rfnm_api_failcode set_tx_channel_active(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = true);
+        MSDLL rfnm_api_failcode set_tx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
+        MSDLL rfnm_api_failcode set_tx_channel_freq(uint32_t channel, int64_t freq, bool apply = true);
+        MSDLL rfnm_api_failcode set_tx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = true);
+        MSDLL rfnm_api_failcode set_tx_channel_power(uint32_t channel, int8_t power, bool apply = true);
+        MSDLL rfnm_api_failcode set_tx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply = true);
+        MSDLL rfnm_api_failcode set_tx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply = true);
+        // not exposing setter for data_type because this library only handles complex samples for now
 
         // High level stream API
         MSDLL rx_stream * rx_stream_create(uint8_t ch_ids);
@@ -222,8 +276,6 @@ namespace rfnm {
         MSDLL static enum rfnm_rf_path string_to_rf_path(std::string path);
         MSDLL static std::string rf_path_to_string(enum rfnm_rf_path path);
 
-        struct status* s = nullptr;
-
     private:
         void threadfn(size_t thread_index);
 
@@ -240,6 +292,8 @@ namespace rfnm {
 
         std::mutex s_dev_status_mutex;
         std::mutex s_transport_pp_mutex;
+
+        struct status* s = nullptr;
 
         struct rx_buf_s rx_s = {};
         struct tx_buf_s tx_s = {};

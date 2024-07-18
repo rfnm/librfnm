@@ -3,8 +3,6 @@
 #include "device.h"
 
 namespace rfnm {
-    const size_t MAX_RX_CHAN_COUNT = 4;
-
     struct partial_buf {
         uint8_t* buf;
         uint32_t left;
@@ -40,16 +38,16 @@ namespace rfnm {
         size_t outbufsize = 0;
         bool stream_active = false;
 
-        struct rx_buf * pending_rx_buf[MAX_RX_CHAN_COUNT] = {};
+        struct rx_buf * pending_rx_buf[MAX_RX_CHANNELS] = {};
 
-        struct partial_buf partial_rx_buf[MAX_RX_CHAN_COUNT] = {};
+        struct partial_buf partial_rx_buf[MAX_RX_CHANNELS] = {};
 
-        uint64_t sample_counter[MAX_RX_CHAN_COUNT] = {};
-        double ns_per_sample[MAX_RX_CHAN_COUNT] = {};
-        uint32_t last_phytimer[MAX_RX_CHAN_COUNT] = {};
-        uint32_t phytimer_ticks_per_sample[MAX_RX_CHAN_COUNT] = {};
+        uint64_t sample_counter[MAX_RX_CHANNELS] = {};
+        double ns_per_sample[MAX_RX_CHANNELS] = {};
+        uint32_t last_phytimer[MAX_RX_CHANNELS] = {};
+        uint32_t phytimer_ticks_per_sample[MAX_RX_CHANNELS] = {};
 
-        bool dc_correction[MAX_RX_CHAN_COUNT] = {false};
-        union quad_dc_offset dc_offsets[MAX_RX_CHAN_COUNT] = {};
+        bool dc_correction[MAX_RX_CHANNELS] = {false};
+        union quad_dc_offset dc_offsets[MAX_RX_CHANNELS] = {};
     };
 }

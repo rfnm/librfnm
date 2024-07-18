@@ -3,32 +3,18 @@
 
 using namespace rfnm;
 
-static uint16_t librfnm_rx_chan_flags[MAX_RX_CHAN_COUNT] = {
-    LIBRFNM_CH0,
-    LIBRFNM_CH1,
-    LIBRFNM_CH2,
-    LIBRFNM_CH3,
-};
-
-static uint16_t librfnm_rx_chan_apply[MAX_RX_CHAN_COUNT] = {
-    LIBRFNM_APPLY_CH0_RX,
-    LIBRFNM_APPLY_CH1_RX,
-    LIBRFNM_APPLY_CH2_RX,
-    LIBRFNM_APPLY_CH3_RX
-};
-
 MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
-    for (unsigned int channel = 0; channel < MAX_RX_CHAN_COUNT; channel++) {
-        if (!(ch_ids & librfnm_rx_chan_flags[channel])) continue;
+    for (unsigned int channel = 0; channel < MAX_RX_CHANNELS; channel++) {
+        if (!(ch_ids & channel_flags[channel])) continue;
         channels.push_back(channel);
     }
 
-    outbufsize = RFNM_USB_RX_PACKET_ELEM_CNT * dev.s->transport_status.rx_stream_format;
+    outbufsize = RFNM_USB_RX_PACKET_ELEM_CNT * dev.get_transport_status()->rx_stream_format;
 
     for (unsigned int channel : channels) {
         partial_rx_buf[channel].buf = new uint8_t[outbufsize];
-        phytimer_ticks_per_sample[channel] = 4 * dev.s->rx.ch[channel].samp_freq_div_n;
-        ns_per_sample[channel] = dev.s->rx.ch[channel].samp_freq_div_n * 1e9 / dev.s->hwinfo.clock.dcs_clk;
+        phytimer_ticks_per_sample[channel] = 4 * dev.get_rx_channel(channel)->samp_freq_div_n;
+        ns_per_sample[channel] = dev.get_rx_channel(channel)->samp_freq_div_n * 1e9 / dev.get_hwinfo()->clock.dcs_clk;
         sample_counter[channel] = 0;
     }
 }
@@ -82,9 +68,9 @@ MSDLL rfnm_api_failcode rx_stream::activate() {
     uint16_t apply_mask = 0;
     uint8_t chan_mask = 0;
     for (unsigned int channel : channels) {
-        dev.s->rx.ch[channel].enable = RFNM_CH_ON;
-        apply_mask |= librfnm_rx_chan_apply[channel];
-        chan_mask |= librfnm_rx_chan_flags[channel];
+        dev.set_rx_channel_active(channel, RFNM_CH_ON, RFNM_CH_STREAM_AUTO, false);
+        apply_mask |= rx_channel_apply_flags[channel];
+        chan_mask |= channel_flags[channel];
     }
 
     // flush old junk before streaming new data
@@ -110,7 +96,7 @@ MSDLL rfnm_api_failcode rx_stream::activate() {
         // First sample can sometimes take a while to come, so fetch it here before normal streaming
         // This first chunk is also useful for initial calibration
         struct rx_buf* lrxbuf;
-        ret = dev.rx_dqbuf(&lrxbuf, librfnm_rx_chan_flags[channel], 250);
+        ret = dev.rx_dqbuf(&lrxbuf, channel_flags[channel], 250);
         if (ret) return ret;
 
         last_phytimer[channel] = lrxbuf->phytimer;
@@ -132,7 +118,7 @@ MSDLL rfnm_api_failcode rx_stream::activate() {
         dev.rx_qbuf(lrxbuf);
 
         // Compute initial DC offsets
-        switch (dev.s->transport_status.rx_stream_format) {
+        switch (dev.get_transport_status()->rx_stream_format) {
         case LIBRFNM_STREAM_FORMAT_CS8:
             measQuadDcOffset(reinterpret_cast<int8_t *>(partial_rx_buf[channel].buf),
                     RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].i8, 1.0f);
@@ -149,7 +135,7 @@ MSDLL rfnm_api_failcode rx_stream::activate() {
 
         // Apply DC correction on first chunk if requested
         if (dc_correction[channel]) {
-            switch (dev.s->transport_status.rx_stream_format) {
+            switch (dev.get_transport_status()->rx_stream_format) {
             case LIBRFNM_STREAM_FORMAT_CS8:
                 applyQuadDcOffset(reinterpret_cast<int8_t *>(partial_rx_buf[channel].buf),
                         RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].i8);
@@ -182,9 +168,9 @@ MSDLL rfnm_api_failcode rx_stream::deactivate() {
     uint16_t apply_mask = 0;
     uint8_t chan_mask = 0;
     for (unsigned int channel : channels) {
-        dev.s->rx.ch[channel].enable = RFNM_CH_OFF;
-        apply_mask |= librfnm_rx_chan_apply[channel];
-        chan_mask |= librfnm_rx_chan_flags[channel];
+        dev.set_rx_channel_active(channel, RFNM_CH_OFF, RFNM_CH_STREAM_AUTO, false);
+        apply_mask |= rx_channel_apply_flags[channel];
+        chan_mask |= channel_flags[channel];
     }
     ret = dev.set(apply_mask);
 
@@ -197,7 +183,7 @@ MSDLL rfnm_api_failcode rx_stream::deactivate() {
 
 MSDLL void rx_stream::set_auto_dc_offset(bool enabled, uint8_t channel_mask) {
     for (unsigned int channel : channels) {
-        if (channel_mask & librfnm_rx_chan_flags[channel]) {
+        if (channel_mask & channel_flags[channel]) {
             dc_correction[channel] = enabled;
         }
     }
@@ -208,16 +194,16 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
     rfnm_api_failcode ret = RFNM_API_OK;
 
     auto timeout = std::chrono::system_clock::now() + std::chrono::microseconds(timeout_us);
-    size_t bytes_per_ele = dev.s->transport_status.rx_stream_format;
-    size_t read_elems[MAX_RX_CHAN_COUNT] = {};
+    size_t bytes_per_ele = dev.get_transport_status()->rx_stream_format;
+    size_t read_elems[MAX_RX_CHANNELS] = {};
     size_t buf_idx = 0;
     bool need_more_data = false;
     bool time_set = false;
     uint64_t first_sample;
     size_t first_chan = SIZE_MAX;
 
-    for (size_t channel = 0; channel < MAX_RX_CHAN_COUNT; channel++) {
-        if (dev.s->rx.ch[channel].enable != RFNM_CH_ON) {
+    for (size_t channel = 0; channel < MAX_RX_CHANNELS; channel++) {
+        if (dev.get_rx_channel(channel)->enable != RFNM_CH_ON) {
             continue;
         }
 
@@ -270,8 +256,8 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
         need_more_data = false;
         buf_idx = 0;
 
-        for (size_t channel = 0; channel < MAX_RX_CHAN_COUNT; channel++) {
-            if (dev.s->rx.ch[channel].enable != RFNM_CH_ON) {
+        for (size_t channel = 0; channel < MAX_RX_CHANNELS; channel++) {
+            if (dev.get_rx_channel(channel)->enable != RFNM_CH_ON) {
                 continue;
             }
 
@@ -304,7 +290,7 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
             if (dc_correction[channel]) {
                 // periodically recalibrate DC offset to account for drift
                 if ((pending_rx_buf[channel]->usb_cc & 0xF) == 0) {
-                    switch (dev.s->transport_status.rx_stream_format) {
+                    switch (dev.get_transport_status()->rx_stream_format) {
                     case LIBRFNM_STREAM_FORMAT_CS8:
                         measQuadDcOffset(reinterpret_cast<int8_t *>(pending_rx_buf[channel]->buf),
                                 RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].i8, 0.1f);
@@ -320,7 +306,7 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
                     }
                 }
 
-                switch (dev.s->transport_status.rx_stream_format) {
+                switch (dev.get_transport_status()->rx_stream_format) {
                 case LIBRFNM_STREAM_FORMAT_CS8:
                     applyQuadDcOffset(reinterpret_cast<int8_t *>(pending_rx_buf[channel]->buf),
                             RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].i8);
@@ -395,7 +381,7 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us) {
             wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(time_remaining).count();
         }
 
-        ret = dev.rx_dqbuf(&pending_rx_buf[channel], librfnm_rx_chan_flags[channel], wait_ms);
+        ret = dev.rx_dqbuf(&pending_rx_buf[channel], channel_flags[channel], wait_ms);
         if (ret) break;
     }
 
