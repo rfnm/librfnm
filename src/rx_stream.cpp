@@ -234,13 +234,13 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
     }
 
     while (need_more_data) {
-        uint32_t wait_ms = 0;
+        uint32_t wait_us = 0;
         auto time_remaining = timeout - std::chrono::system_clock::now();
         if (time_remaining > std::chrono::duration<int64_t>::zero()) {
-            wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(time_remaining).count();
+            wait_us = std::chrono::duration_cast<std::chrono::microseconds>(time_remaining).count();
         }
 
-        if (rx_dqbuf_multi(wait_ms)) {
+        if (rx_dqbuf_multi(wait_us)) {
             break;
         }
 
@@ -329,13 +329,13 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool dc_reset) 
     for (uint32_t channel : channels) {
         if (pending_rx_buf[channel]) continue;
 
-        uint32_t wait_ms = 0;
+        uint32_t wait_us = 0;
         auto time_remaining = timeout - std::chrono::system_clock::now();
         if (time_remaining > std::chrono::duration<int64_t>::zero()) {
-            wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(time_remaining).count();
+            wait_us = std::chrono::duration_cast<std::chrono::microseconds>(time_remaining).count();
         }
 
-        ret = dev.rx_dqbuf(&pending_rx_buf[channel], channel_flags[channel], wait_ms);
+        ret = dev.rx_dqbuf(&pending_rx_buf[channel], channel_flags[channel], wait_us);
         if (ret) break;
 
         if (dc_correction[channel]) {
