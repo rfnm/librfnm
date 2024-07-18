@@ -1392,9 +1392,23 @@ MSDLL rfnm_api_failcode device::set_tx_channel_path(uint32_t channel, enum rfnm_
 
 
 MSDLL uint32_t device::get_rx_channel_count() {
-    return s->hwinfo.daughterboard[0].rx_ch_cnt + s->hwinfo.daughterboard[1].rx_ch_cnt;
+    uint32_t count =  s->hwinfo.daughterboard[0].rx_ch_cnt + s->hwinfo.daughterboard[1].rx_ch_cnt;
+
+    // should never happen unless firmware malfunctions
+    if (count > MAX_RX_CHANNELS) {
+        count = MAX_RX_CHANNELS;
+    }
+
+    return count;
 }
 
 MSDLL uint32_t device::get_tx_channel_count() {
-    return s->hwinfo.daughterboard[0].tx_ch_cnt + s->hwinfo.daughterboard[1].tx_ch_cnt;
+    uint32_t count =  s->hwinfo.daughterboard[0].tx_ch_cnt + s->hwinfo.daughterboard[1].tx_ch_cnt;
+
+    // should never happen unless firmware malfunctions
+    if (count > MAX_TX_CHANNELS) {
+        count = MAX_TX_CHANNELS;
+    }
+
+    return count;
 }
