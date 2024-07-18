@@ -20,8 +20,8 @@ namespace rfnm {
         MSDLL explicit rx_stream(device &rfnm, uint8_t ch_ids);
         MSDLL ~rx_stream();
 
-        MSDLL rfnm_api_failcode activate();
-        MSDLL rfnm_api_failcode deactivate();
+        MSDLL rfnm_api_failcode start();
+        MSDLL rfnm_api_failcode stop();
 
         MSDLL void set_auto_dc_offset(bool enabled, uint8_t ch_ids = 0xFF);
 
