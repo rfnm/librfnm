@@ -1261,6 +1261,20 @@ MSDLL rfnm_api_failcode device::set_rx_channel_agc(uint32_t channel, enum rfnm_a
     }
 }
 
+MSDLL rfnm_api_failcode device::set_rx_channel_fm_notch(uint32_t channel, enum rfnm_fm_notch fm_notch, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].fm_notch = fm_notch;
+
+        if (apply) {
+            return set(rx_channel_apply_flags[channel]);
+        } else {
+            return RFNM_API_OK;
+        }
+    } else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
 MSDLL rfnm_api_failcode device::set_rx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply) {
     if (channel < MAX_RX_CHANNELS) {
         s->rx.ch[channel].bias_tee = bias_tee;
