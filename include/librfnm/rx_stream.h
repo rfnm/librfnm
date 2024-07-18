@@ -34,7 +34,7 @@ namespace rfnm {
 
         device &dev;
 
-        std::vector<unsigned int> channels;
+        std::vector<uint32_t> channels;
         size_t outbufsize = 0;
         bool stream_active = false;
 

@@ -4,14 +4,14 @@
 using namespace rfnm;
 
 MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
-    for (unsigned int channel = 0; channel < MAX_RX_CHANNELS; channel++) {
+    for (uint32_t channel = 0; channel < dev.get_rx_channel_count(); channel++) {
         if (!(ch_ids & channel_flags[channel])) continue;
         channels.push_back(channel);
     }
 
     outbufsize = RFNM_USB_RX_PACKET_ELEM_CNT * dev.get_transport_status()->rx_stream_format;
 
-    for (unsigned int channel : channels) {
+    for (uint32_t channel : channels) {
         partial_rx_buf[channel].buf = new uint8_t[outbufsize];
         phytimer_ticks_per_sample[channel] = 4 * dev.get_rx_channel(channel)->samp_freq_div_n;
         ns_per_sample[channel] = dev.get_rx_channel(channel)->samp_freq_div_n * 1e9 / dev.get_hwinfo()->clock.dcs_clk;
@@ -22,7 +22,7 @@ MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
 MSDLL rx_stream::~rx_stream() {
     deactivate();
 
-    for (unsigned int channel : channels) {
+    for (uint32_t channel : channels) {
         delete[] partial_rx_buf[channel].buf;
     }
 }
@@ -62,12 +62,15 @@ static void applyQuadDcOffset(T *buf, size_t n, const T *offsets) {
 MSDLL rfnm_api_failcode rx_stream::activate() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
+    // starting rx worker without any channels streaming will cause errors
+    if (channels.size() == 0) return ret;
+
     dev.rx_work_start();
     stream_active = true;
 
     uint16_t apply_mask = 0;
     uint8_t chan_mask = 0;
-    for (unsigned int channel : channels) {
+    for (uint32_t channel : channels) {
         dev.set_rx_channel_active(channel, RFNM_CH_ON, RFNM_CH_STREAM_AUTO, false);
         apply_mask |= rx_channel_apply_flags[channel];
         chan_mask |= channel_flags[channel];
@@ -92,7 +95,7 @@ MSDLL rfnm_api_failcode rx_stream::activate() {
     uint32_t first_phytimer;
     bool first_phytimer_set = false;
 
-    for (unsigned int channel : channels) {
+    for (uint32_t channel : channels) {
         // First sample can sometimes take a while to come, so fetch it here before normal streaming
         // This first chunk is also useful for initial calibration
         struct rx_buf* lrxbuf;
@@ -167,7 +170,7 @@ MSDLL rfnm_api_failcode rx_stream::deactivate() {
     // stop the ADCs
     uint16_t apply_mask = 0;
     uint8_t chan_mask = 0;
-    for (unsigned int channel : channels) {
+    for (uint32_t channel : channels) {
         dev.set_rx_channel_active(channel, RFNM_CH_OFF, RFNM_CH_STREAM_AUTO, false);
         apply_mask |= rx_channel_apply_flags[channel];
         chan_mask |= channel_flags[channel];
@@ -182,7 +185,7 @@ MSDLL rfnm_api_failcode rx_stream::deactivate() {
 }
 
 MSDLL void rx_stream::set_auto_dc_offset(bool enabled, uint8_t channel_mask) {
-    for (unsigned int channel : channels) {
+    for (uint32_t channel : channels) {
         if (channel_mask & channel_flags[channel]) {
             dc_correction[channel] = enabled;
         }
@@ -202,11 +205,7 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
     uint64_t first_sample;
     size_t first_chan = SIZE_MAX;
 
-    for (size_t channel = 0; channel < MAX_RX_CHANNELS; channel++) {
-        if (dev.get_rx_channel(channel)->enable != RFNM_CH_ON) {
-            continue;
-        }
-
+    for (uint32_t channel : channels) {
         if (first_chan == SIZE_MAX) {
             first_chan = channel;
         }
@@ -256,11 +255,7 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
         need_more_data = false;
         buf_idx = 0;
 
-        for (size_t channel = 0; channel < MAX_RX_CHANNELS; channel++) {
-            if (dev.get_rx_channel(channel)->enable != RFNM_CH_ON) {
-                continue;
-            }
-
+        for (uint32_t channel : channels) {
             uint32_t rounding_ticks = phytimer_ticks_per_sample[channel] / 2;
             uint32_t samp_delta = (pending_rx_buf[channel]->phytimer - last_phytimer[channel] + rounding_ticks) /
                                   phytimer_ticks_per_sample[channel];
@@ -372,7 +367,7 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us) {
     rfnm_api_failcode ret = RFNM_API_OK;
     auto timeout = std::chrono::system_clock::now() + std::chrono::microseconds(timeout_us);
 
-    for (unsigned int channel : channels) {
+    for (uint32_t channel : channels) {
         if (pending_rx_buf[channel]) continue;
 
         uint32_t wait_ms = 0;
@@ -389,7 +384,7 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us) {
 }
 
 void rx_stream::rx_qbuf_multi() {
-    for (unsigned int channel : channels) {
+    for (uint32_t channel : channels) {
         if (pending_rx_buf[channel]) {
             dev.rx_qbuf(pending_rx_buf[channel]);
             pending_rx_buf[channel] = nullptr;
