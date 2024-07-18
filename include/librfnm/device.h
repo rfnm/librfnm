@@ -107,7 +107,7 @@ namespace rfnm {
 
     class device {
     public:
-        MSDLL explicit device(enum transport transport, std::string address = "", enum debug_level dbg = LIBRFNM_DEBUG_NONE);
+        MSDLL explicit device(enum transport transport, std::string address = "", enum debug_level dbg = DEBUG_NONE);
         MSDLL ~device();
 
         MSDLL static std::vector<struct rfnm_dev_hwinfo> find(enum transport transport, std::string address = "", int bind = 0);
@@ -162,7 +162,7 @@ namespace rfnm {
         MSDLL rfnm_api_failcode set_rx_channel_active(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = true);
 
         // Low level TX stream API
-        MSDLL rfnm_api_failcode tx_work_start(enum tx_latency_policy policy = LIBRFNM_TX_LATENCY_POLICY_DEFAULT);
+        MSDLL rfnm_api_failcode tx_work_start(enum tx_latency_policy policy = TX_LATENCY_POLICY_DEFAULT);
         MSDLL rfnm_api_failcode tx_work_stop();
         MSDLL rfnm_api_failcode tx_qbuf(struct tx_buf* buf, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode tx_dqbuf(struct tx_buf** buf);
@@ -193,9 +193,9 @@ namespace rfnm {
 
         struct rx_buf_s rx_s = {};
         struct tx_buf_s tx_s = {};
-        struct thread_data_s thread_data[LIBRFNM_THREAD_COUNT] = {};
+        struct thread_data_s thread_data[THREAD_COUNT] = {};
 
-        std::array<std::thread, LIBRFNM_THREAD_COUNT> thread_c{};
+        std::array<std::thread, THREAD_COUNT> thread_c{};
 
         uint32_t cc_tx = 0;
         uint32_t cc_rx = 0;

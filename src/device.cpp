@@ -13,7 +13,7 @@ struct rfnm::_usb_handle {
 MSDLL device::device(enum transport transport, std::string address, enum debug_level dbg) {
     rx_s.qbuf_cnt = 0;
 
-    if (transport != LIBRFNM_TRANSPORT_USB) {
+    if (transport != TRANSPORT_USB) {
         spdlog::error("Transport not supported");
         throw std::runtime_error("Transport not supported");
     }
@@ -28,8 +28,8 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
     libusb_device** devs = NULL;
 
     // set default/native stream format
-    s->transport_status.rx_stream_format = LIBRFNM_STREAM_FORMAT_CS16;
-    s->transport_status.tx_stream_format = LIBRFNM_STREAM_FORMAT_CS16;
+    s->transport_status.rx_stream_format = STREAM_FORMAT_CS16;
+    s->transport_status.tx_stream_format = STREAM_FORMAT_CS16;
 
 #if LIBUSB_API_VERSION >= 0x0100010A
     r = libusb_init_context(nullptr, nullptr, 0);
@@ -114,20 +114,20 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
             goto next;
         }
 
-        if (get(LIBRFNM_REQ_ALL)) {
+        if (get(REQ_ALL)) {
             goto next;
         }
 
         libusb_free_device_list(devs, 1);
 
-        for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+        for (int8_t i = 0; i < THREAD_COUNT; i++) {
             thread_data[i].ep_id = i + 1;
             thread_data[i].rx_active = 0;
             thread_data[i].tx_active = 0;
             thread_data[i].shutdown_req = 0;
         }
 
-        for (int i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+        for (int i = 0; i < THREAD_COUNT; i++) {
             thread_c[i] = std::thread(&device::threadfn, this, i);
         }
 
@@ -156,7 +156,7 @@ error:
 }
 
 MSDLL device::~device() {
-    for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+    for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].rx_active = 0;
         thread_data[i].tx_active = 0;
@@ -373,13 +373,13 @@ void device::threadfn(size_t thread_index) {
                 goto skip_rx;
             }
 
-            if (s->transport_status.rx_stream_format == LIBRFNM_STREAM_FORMAT_CS8) {
+            if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS8) {
                 unpack_12_to_cs8(buf->buf, (uint8_t*)lrxbuf->buf, RFNM_USB_RX_PACKET_ELEM_CNT);
             }
-            else if (s->transport_status.rx_stream_format == LIBRFNM_STREAM_FORMAT_CS16) {
+            else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS16) {
                 unpack_12_to_cs16(buf->buf, (uint8_t*)lrxbuf->buf, RFNM_USB_RX_PACKET_ELEM_CNT);
             }
-            else if (s->transport_status.rx_stream_format == LIBRFNM_STREAM_FORMAT_CF32) {
+            else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CF32) {
                 unpack_12_to_cf32(buf->buf, (uint8_t*)lrxbuf->buf, RFNM_USB_RX_PACKET_ELEM_CNT);
             }
 
@@ -478,7 +478,7 @@ read_dev_status:
                         if (ms_int.count() > 25) {
                             spdlog::error("stopping stream");
 
-                            for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+                            for (int8_t i = 0; i < THREAD_COUNT; i++) {
                                 thread_data[i].rx_active = 0;
                                 thread_data[i].tx_active = 0;
                                 thread_data[i].shutdown_req = 1;
@@ -501,7 +501,7 @@ read_dev_status:
 }
 
 MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport, std::string address, int bind) {
-    if (transport != LIBRFNM_TRANSPORT_USB) {
+    if (transport != TRANSPORT_USB) {
         spdlog::error("Transport not supported");
         return {};
     }
@@ -579,7 +579,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
         r = libusb_control_transfer(thandle, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_GET_DEV_HWINFO, 0, (unsigned char*)&r_hwinfo, sizeof(struct rfnm_dev_hwinfo), 50);
         if (r < 0) {
-            spdlog::error("libusb_control_transfer for LIBRFNM_REQ_HWINFO failed");
+            spdlog::error("libusb_control_transfer for REQ_HWINFO failed");
             goto next;
         }
 
@@ -615,9 +615,9 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
     }
 
     switch (format) {
-    case LIBRFNM_STREAM_FORMAT_CS8:
-    case LIBRFNM_STREAM_FORMAT_CS16:
-    case LIBRFNM_STREAM_FORMAT_CF32:
+    case STREAM_FORMAT_CS8:
+    case STREAM_FORMAT_CS16:
+    case STREAM_FORMAT_CF32:
         s->transport_status.rx_stream_format = format;
         s->transport_status.tx_stream_format = format;
         if (bufsize) {
@@ -654,7 +654,7 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
         rx_buffers_allocated = true;
         size_t bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
 
-        for (size_t i = 0; i < LIBRFNM_MIN_RX_BUFCNT; i++) {
+        for (size_t i = 0; i < MIN_RX_BUFCNT; i++) {
             rx_buf *rxbuf = new rx_buf();
             rxbuf->buf = new uint8_t[bufsize];
             rx_qbuf(rxbuf, true);
@@ -666,7 +666,7 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
         rx_s.usb_cc[adc_id] = UINT64_MAX;
     }
 
-    for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+    for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].rx_active = 1;
         thread_data[i].cv.notify_one();
@@ -681,7 +681,7 @@ MSDLL rfnm_api_failcode device::rx_work_stop() {
     if (rx_stream_count > 0) rx_stream_count--;
 
     if (rx_stream_count == 0) {
-        for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+        for (int8_t i = 0; i < THREAD_COUNT; i++) {
             std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
             thread_data[i].rx_active = 0;
         }
@@ -693,7 +693,7 @@ MSDLL rfnm_api_failcode device::rx_work_stop() {
 MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
     rfnm_api_failcode ret = RFNM_API_OK;
 
-    for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+    for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].tx_active = 1;
         thread_data[i].cv.notify_one();
@@ -705,7 +705,7 @@ MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
 MSDLL rfnm_api_failcode device::tx_work_stop() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
-    for (int8_t i = 0; i < LIBRFNM_THREAD_COUNT; i++) {
+    for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].tx_active = 0;
     }
@@ -834,7 +834,7 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         return 1;
     }
     else {
-        if (queue_size > LIBRFNM_RX_RECOMB_BUF_LEN) {
+        if (queue_size > RX_RECOMB_BUF_LEN) {
             dqbuf_overwrite_cc(adc_id, acquire_lock);
         }
         return 0;
@@ -844,19 +844,19 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
 MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, uint32_t timeout_us) {
     int is_single_ch, required_adc_id;
 
-    if (rx_s.qbuf_cnt < LIBRFNM_MIN_RX_BUFCNT) {
+    if (rx_s.qbuf_cnt < MIN_RX_BUFCNT) {
         return RFNM_API_MIN_QBUF_CNT_NOT_SATIFIED;
     }
 
     switch (ch_ids) {
-    case LIBRFNM_CH0:
-    case LIBRFNM_CH1:
-    case LIBRFNM_CH2:
-    case LIBRFNM_CH3:
-    case LIBRFNM_CH4:
-    case LIBRFNM_CH5:
-    case LIBRFNM_CH6:
-    case LIBRFNM_CH7:
+    case CH0:
+    case CH1:
+    case CH2:
+    case CH3:
+    case CH4:
+    case CH5:
+    case CH6:
+    case CH7:
         is_single_ch = 1;
         break;
     case 0:
@@ -891,7 +891,7 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, u
             std::unique_lock lk(rx_s.out_mutex);
             rx_s.cv.wait_for(lk, std::chrono::microseconds(timeout_us),
                 [this, required_adc_id] { return dqbuf_is_cc_continuous(required_adc_id, 0) ||
-                                rx_s.out[required_adc_id].size() > LIBRFNM_RX_RECOMB_BUF_LEN; }
+                                rx_s.out[required_adc_id].size() > RX_RECOMB_BUF_LEN; }
             );
         }
 
@@ -1018,13 +1018,13 @@ MSDLL rfnm_api_failcode device::tx_dqbuf(struct tx_buf** buf) {
 MSDLL rfnm_api_failcode device::get(enum req_type type) {
     int r;
 
-    if (type & LIBRFNM_REQ_HWINFO) {
+    if (type & REQ_HWINFO) {
         struct rfnm_dev_hwinfo r_hwinfo;
 
         r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_GET_DEV_HWINFO, 0, (unsigned char*)&r_hwinfo, sizeof(struct rfnm_dev_hwinfo), 50);
         if (r < 0) {
-            spdlog::error("libusb_control_transfer for LIBRFNM_REQ_HWINFO failed");
+            spdlog::error("libusb_control_transfer for REQ_HWINFO failed");
             return RFNM_API_USB_FAIL;
         }
         memcpy(&s->hwinfo, &r_hwinfo, sizeof(struct rfnm_dev_hwinfo));
@@ -1035,31 +1035,31 @@ MSDLL rfnm_api_failcode device::get(enum req_type type) {
         }
     }
 
-    if (type & LIBRFNM_REQ_TX) {
+    if (type & REQ_TX) {
         struct rfnm_dev_tx_ch_list r_chlist;
 
         r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_GET_TX_CH_LIST, 0, (unsigned char*)&r_chlist, sizeof(struct rfnm_dev_tx_ch_list), 50);
         if (r < 0) {
-            spdlog::error("libusb_control_transfer for LIBRFNM_REQ_TX failed");
+            spdlog::error("libusb_control_transfer for REQ_TX failed");
             return RFNM_API_USB_FAIL;
         }
         memcpy(&s->tx, &r_chlist, sizeof(struct rfnm_dev_tx_ch_list));
     }
 
-    if (type & LIBRFNM_REQ_RX) {
+    if (type & REQ_RX) {
         struct rfnm_dev_rx_ch_list r_chlist;
 
         r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_GET_RX_CH_LIST, 0, (unsigned char*)&r_chlist, sizeof(struct rfnm_dev_rx_ch_list), 50);
         if (r < 0) {
-            spdlog::error("libusb_control_transfer for LIBRFNM_REQ_RX failed");
+            spdlog::error("libusb_control_transfer for REQ_RX failed");
             return RFNM_API_USB_FAIL;
         }
         memcpy(&s->rx, &r_chlist, sizeof(struct rfnm_dev_rx_ch_list));
     }
 
-    if (type & LIBRFNM_REQ_DEV_STATUS) {
+    if (type & REQ_DEV_STATUS) {
         struct rfnm_dev_status dev_status;
 
         r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
@@ -1088,7 +1088,7 @@ MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, ui
         r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_SET_TX_CH_LIST, 0, (unsigned char*)&r_chlist, sizeof(struct rfnm_dev_tx_ch_list), 50);
         if (r < 0) {
-            spdlog::error("libusb_control_transfer for LIBRFNM_REQ_TX failed");
+            spdlog::error("libusb_control_transfer for REQ_TX failed");
             return RFNM_API_USB_FAIL;
         }
     }
@@ -1102,7 +1102,7 @@ MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, ui
         r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 RFNM_SET_RX_CH_LIST, 0, (unsigned char*)&r_chlist, sizeof(struct rfnm_dev_rx_ch_list), 50);
         if (r < 0) {
-            spdlog::error("libusb_control_transfer for LIBRFNM_REQ_RX failed");
+            spdlog::error("libusb_control_transfer for REQ_RX failed");
             return RFNM_API_USB_FAIL;
         }
     }
@@ -1121,7 +1121,7 @@ MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, ui
             r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                     RFNM_GET_SET_RESULT, 0, (unsigned char*)&r_res, sizeof(struct rfnm_dev_get_set_result), 50);
             if (r < 0) {
-                spdlog::error("libusb_control_transfer for LIBRFNM_REQ_RX failed");
+                spdlog::error("libusb_control_transfer for REQ_RX failed");
                 return RFNM_API_USB_FAIL;
             }
 
