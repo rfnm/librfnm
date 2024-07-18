@@ -136,6 +136,7 @@ namespace rfnm {
         // not exposing setter for rfic_dc_i and rfic_dc_q because that functionality will need to change
         // use the stream class for ADC interleaving aware DC offset removal instead
         MSDLL rfnm_api_failcode set_rx_channel_agc(uint32_t channel, enum rfnm_agc_type agc, bool apply = true);
+        MSDLL rfnm_api_failcode set_rx_channel_fm_notch(uint32_t channel, enum rfnm_fm_notch fm_notch, bool apply = true);
         MSDLL rfnm_api_failcode set_rx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply = true);
         MSDLL rfnm_api_failcode set_rx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply = true);
         // not exposing setter for data_type because this library only handles complex samples for now
