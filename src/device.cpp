@@ -606,7 +606,12 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
         if (bufsize) {
             *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
         }
-        return RFNM_API_NOT_SUPPORTED;
+
+        if (format == s->transport_status.rx_stream_format) {
+            return RFNM_API_OK;
+        } else {
+            return RFNM_API_NOT_SUPPORTED;
+        }
     }
 
     switch (format) {
