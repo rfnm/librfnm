@@ -24,7 +24,7 @@ int main() {
     // List all available devices
     std::vector<rfnm_dev_hwinfo> list;
     try {
-        list = rfnm::device::find(rfnm::transport::LIBRFNM_TRANSPORT_USB);
+        list = rfnm::device::find(rfnm::transport::TRANSPORT_USB);
     }
     catch (const std::exception& e) {
         fprintf(stderr, "Failed to list devices: %s\n", e.what());
