@@ -20,7 +20,7 @@ MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
 }
 
 MSDLL rx_stream::~rx_stream() {
-    deactivate();
+    stop();
 
     for (uint32_t channel : channels) {
         delete[] partial_rx_buf[channel].buf;
@@ -59,7 +59,7 @@ static void applyQuadDcOffset(T *buf, size_t n, const T *offsets) {
     }
 }
 
-MSDLL rfnm_api_failcode rx_stream::activate() {
+MSDLL rfnm_api_failcode rx_stream::start() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
     // starting rx worker without any channels streaming will cause errors
@@ -158,7 +158,7 @@ MSDLL rfnm_api_failcode rx_stream::activate() {
     return ret;
 }
 
-MSDLL rfnm_api_failcode rx_stream::deactivate() {
+MSDLL rfnm_api_failcode rx_stream::stop() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
     if (!stream_active) return ret;
