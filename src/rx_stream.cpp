@@ -71,6 +71,13 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     uint16_t apply_mask = 0;
     uint8_t chan_mask = 0;
     for (uint32_t channel : channels) {
+        // can't have multiple streams running on a channel
+        if (dev.get_rx_channel(channel)->enable != RFNM_CH_OFF) {
+            dev.rx_work_stop();
+            stream_active = false;
+            return RFNM_API_NOT_SUPPORTED;
+        }
+
         dev.set_rx_channel_active(channel, RFNM_CH_ON, RFNM_CH_STREAM_AUTO, false);
         apply_mask |= rx_channel_apply_flags[channel];
         chan_mask |= channel_flags[channel];
