@@ -101,7 +101,7 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     }
 
     // flush old junk before streaming new data
-    ret = dev.rx_flush(20, chan_mask);
+    ret = dev.rx_flush(20000, chan_mask);
     if (ret) goto error;
 
     // start ADCs
