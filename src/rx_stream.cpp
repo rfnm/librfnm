@@ -77,6 +77,8 @@ static void applyQuadDcOffset(T *buf, size_t n, const T *offsets) {
 
 MSDLL rfnm_api_failcode rx_stream::start() {
     rfnm_api_failcode ret = RFNM_API_OK;
+    uint32_t first_phytimer;
+    bool first_phytimer_set = false;
 
     // starting rx worker without any channels streaming will cause errors
     if (channels.size() == 0) return ret;
@@ -89,9 +91,8 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     for (uint32_t channel : channels) {
         // can't have multiple streams running on a channel
         if (dev.get_rx_channel(channel)->enable != RFNM_CH_OFF) {
-            dev.rx_work_stop();
-            stream_active = false;
-            return RFNM_API_NOT_SUPPORTED;
+            ret = RFNM_API_NOT_SUPPORTED;
+            goto error;
         }
 
         dev.set_rx_channel_active(channel, RFNM_CH_ON, RFNM_CH_STREAM_AUTO, false);
@@ -101,11 +102,11 @@ MSDLL rfnm_api_failcode rx_stream::start() {
 
     // flush old junk before streaming new data
     ret = dev.rx_flush(20, chan_mask);
-    if (ret) return ret;
+    if (ret) goto error;
 
     // start ADCs
     ret = dev.set(apply_mask);
-    if (ret) return ret;
+    if (ret) goto error;
 
     // work around stale buffer firmware bug by discarding first few buffers
     rx_dqbuf_multi(500000);
@@ -115,11 +116,9 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     rx_dqbuf_multi(50000);
     rx_qbuf_multi();
 
-    uint32_t first_phytimer;
-    bool first_phytimer_set = false;
-
     // First sample can sometimes take a while to come, so fetch it here before normal streaming
-    rx_dqbuf_multi(50000, true);
+    ret = rx_dqbuf_multi(50000, true);
+    if (ret) goto error;
 
     for (uint32_t channel : channels) {
         struct rx_buf* lrxbuf = pending_rx_buf[channel];
@@ -143,6 +142,12 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     }
 
     rx_qbuf_multi();
+
+error:
+    if (ret) {
+        dev.rx_work_stop();
+        stream_active = false;
+    }
 
     return ret;
 }
