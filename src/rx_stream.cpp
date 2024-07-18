@@ -11,10 +11,26 @@ MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
 
     outbufsize = RFNM_USB_RX_PACKET_ELEM_CNT * dev.get_transport_status()->rx_stream_format;
 
+    int16_t m = 1, n = 1;
+    if (channels.size() > 0) {
+        m = dev.get_rx_channel(channels[0])->samp_freq_div_m;
+        n = dev.get_rx_channel(channels[0])->samp_freq_div_n;
+    }
+
+    // check that all channels have matching sample rates before we allocate anything
+    for (uint32_t channel : channels) {
+        if (dev.get_rx_channel(channel)->samp_freq_div_m != m ||
+                dev.get_rx_channel(channel)->samp_freq_div_n != n) {
+            spdlog::error("stream sample rate mismatch");
+            throw std::runtime_error("stream sample rate mismatch");
+        }
+    }
+
+    phytimer_ticks_per_sample = 4 * n;
+    ns_per_sample = n * 1e9 / dev.get_hwinfo()->clock.dcs_clk;
+
     for (uint32_t channel : channels) {
         partial_rx_buf[channel].buf = new uint8_t[outbufsize];
-        phytimer_ticks_per_sample[channel] = 4 * dev.get_rx_channel(channel)->samp_freq_div_n;
-        ns_per_sample[channel] = dev.get_rx_channel(channel)->samp_freq_div_n * 1e9 / dev.get_hwinfo()->clock.dcs_clk;
         sample_counter[channel] = 0;
     }
 }
@@ -116,9 +132,9 @@ MSDLL rfnm_api_failcode rx_stream::start() {
             first_phytimer = lrxbuf->phytimer;
             first_phytimer_set = true;
         } else {
-            uint32_t rounding_ticks = phytimer_ticks_per_sample[channel] / 2;
+            uint32_t rounding_ticks = phytimer_ticks_per_sample / 2;
             uint32_t samp_delta = (lrxbuf->phytimer - first_phytimer + rounding_ticks) /
-                                  phytimer_ticks_per_sample[channel];
+                                  phytimer_ticks_per_sample;
             sample_counter[channel] = samp_delta;
         }
 
@@ -263,9 +279,9 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
         buf_idx = 0;
 
         for (uint32_t channel : channels) {
-            uint32_t rounding_ticks = phytimer_ticks_per_sample[channel] / 2;
+            uint32_t rounding_ticks = phytimer_ticks_per_sample / 2;
             uint32_t samp_delta = (pending_rx_buf[channel]->phytimer - last_phytimer[channel] + rounding_ticks) /
-                                  phytimer_ticks_per_sample[channel];
+                                  phytimer_ticks_per_sample;
             last_phytimer[channel] = pending_rx_buf[channel]->phytimer;
 
             // tolerance of +- 64 samples to deal with phytimer jitter
@@ -354,11 +370,11 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
     }
 
     if (time_set) {
-        timestamp_ns = (uint64_t)(first_sample * ns_per_sample[first_chan]);
+        timestamp_ns = (uint64_t)(first_sample * ns_per_sample);
         elems_read = read_elems[first_chan];
     } else {
         if (first_chan != SIZE_MAX) {
-            timestamp_ns = (uint64_t)(sample_counter[first_chan] * ns_per_sample[first_chan]);
+            timestamp_ns = (uint64_t)(sample_counter[first_chan] * ns_per_sample);
         } else {
             timestamp_ns = 0;
         }

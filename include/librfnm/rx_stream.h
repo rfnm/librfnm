@@ -43,9 +43,9 @@ namespace rfnm {
         struct partial_buf partial_rx_buf[MAX_RX_CHANNELS] = {};
 
         uint64_t sample_counter[MAX_RX_CHANNELS] = {};
-        double ns_per_sample[MAX_RX_CHANNELS] = {};
         uint32_t last_phytimer[MAX_RX_CHANNELS] = {};
-        uint32_t phytimer_ticks_per_sample[MAX_RX_CHANNELS] = {};
+        double ns_per_sample;
+        uint32_t phytimer_ticks_per_sample;
 
         bool dc_correction[MAX_RX_CHANNELS] = {false};
         union quad_dc_offset dc_offsets[MAX_RX_CHANNELS] = {};
