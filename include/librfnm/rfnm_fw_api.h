@@ -1,6 +1,4 @@
-#ifndef INCLUDE_LINUX_RFNM_API_H_
-#define INCLUDE_LINUX_RFNM_API_H_
-
+#pragma once
 #include <cstdint>
 
 #if defined(__GNUC__)
@@ -176,7 +174,7 @@ RFNM_PACKED_STRUCT(
 	struct rfnm_m7_status {
 	uint32_t tx_buf_id;
 	uint32_t rx_head;
-	uint32_t kernel_cache_flush_tail; // this variable shouldn't be here, but it's already mapped ... 
+	uint32_t kernel_cache_flush_tail; // this variable shouldn't be here, but it's already mapped ...
 }
 );
 
@@ -282,5 +280,3 @@ RFNM_PACKED_STRUCT(
 #define RFNM_USB_RX_PACKET_HEAD_SIZE (RFNM_USB_RX_PACKET_SIZE - (LA_RX_BASE_BUFSIZE_12 * RFNM_RX_USB_BUF_MULTI))
 #define RFNM_USB_RX_PACKET_DATA_SIZE (RFNM_USB_RX_PACKET_SIZE - RFNM_USB_RX_PACKET_HEAD_SIZE)
 #define RFNM_USB_RX_PACKET_ELEM_CNT (RFNM_USB_RX_PACKET_DATA_SIZE / 3)
-
-#endif

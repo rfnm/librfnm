@@ -1,0 +1,5 @@
+# Main Interface
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="008c", MODE="0666", GROUP="plugdev"
+
+# Boost Interface
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="15a2", ATTRS{idProduct}=="008d", MODE="0666", GROUP="plugdev"
