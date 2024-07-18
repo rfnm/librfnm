@@ -346,15 +346,15 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool dc_reset) 
                 switch (dev.get_transport_status()->rx_stream_format) {
                 case STREAM_FORMAT_CS8:
                     measQuadDcOffset(reinterpret_cast<int8_t *>(pending_rx_buf[channel]->buf),
-                            RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].i8, filter_factor);
+                            RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i8, filter_factor);
                     break;
                 case STREAM_FORMAT_CS16:
                     measQuadDcOffset(reinterpret_cast<int16_t *>(pending_rx_buf[channel]->buf),
-                            RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].i16, filter_factor);
+                            RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i16, filter_factor);
                     break;
                 case STREAM_FORMAT_CF32:
                     measQuadDcOffset(reinterpret_cast<float *>(pending_rx_buf[channel]->buf),
-                            RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].f32, filter_factor);
+                            RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].f32, filter_factor);
                     break;
                 }
             }
@@ -362,15 +362,15 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool dc_reset) 
             switch (dev.get_transport_status()->rx_stream_format) {
             case STREAM_FORMAT_CS8:
                 applyQuadDcOffset(reinterpret_cast<int8_t *>(pending_rx_buf[channel]->buf),
-                        RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].i8);
+                        RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i8);
                 break;
             case STREAM_FORMAT_CS16:
                 applyQuadDcOffset(reinterpret_cast<int16_t *>(pending_rx_buf[channel]->buf),
-                        RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].i16);
+                        RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i16);
                 break;
             case STREAM_FORMAT_CF32:
                 applyQuadDcOffset(reinterpret_cast<float *>(pending_rx_buf[channel]->buf),
-                        RFNM_USB_RX_PACKET_ELEM_CNT, dc_offsets[channel].f32);
+                        RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].f32);
                 break;
             }
         }
