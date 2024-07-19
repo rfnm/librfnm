@@ -130,9 +130,10 @@ MSDLL rfnm_api_failcode rx_stream::start() {
             first_phytimer = lrxbuf->phytimer;
             first_phytimer_set = true;
         } else {
-            uint32_t rounding_ticks = phytimer_ticks_per_sample / 2;
-            uint32_t samp_delta = (lrxbuf->phytimer - first_phytimer + rounding_ticks) /
-                                  phytimer_ticks_per_sample;
+            int32_t rounding_ticks = phytimer_ticks_per_sample / 2;
+            int32_t samp_delta = static_cast<int32_t>(lrxbuf->phytimer - first_phytimer + rounding_ticks) /
+                                  static_cast<int32_t>(phytimer_ticks_per_sample);
+            spdlog::info("second channel delayed by {} samples", samp_delta);
             sample_counter[channel] = samp_delta;
         }
 
