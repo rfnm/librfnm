@@ -42,7 +42,7 @@ namespace rfnm {
 
         struct partial_buf partial_rx_buf[MAX_RX_CHANNELS] = {};
 
-        uint64_t sample_counter[MAX_RX_CHANNELS] = {};
+        int64_t sample_counter[MAX_RX_CHANNELS] = {};
         uint32_t last_phytimer[MAX_RX_CHANNELS] = {};
         double ns_per_sample;
         uint32_t phytimer_ticks_per_sample;
