@@ -169,7 +169,7 @@ MSDLL device::~device() {
     }
 
     if (rx_buffers_allocated) {
-        rx_flush();
+        rx_flush(0);
 
         // no need to take in_mutex as threads are finished
         while (rx_s.in.size()) {
