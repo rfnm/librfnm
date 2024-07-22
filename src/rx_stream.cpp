@@ -28,19 +28,10 @@ MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
 
     phytimer_ticks_per_sample = 4 * n;
     ns_per_sample = n * 1e9 / dev.get_hwinfo()->clock.dcs_clk;
-
-    for (uint32_t channel : channels) {
-        partial_rx_buf[channel].buf = new uint8_t[outbufsize];
-        sample_counter[channel] = 0;
-    }
 }
 
 MSDLL rx_stream::~rx_stream() {
     stop();
-
-    for (uint32_t channel : channels) {
-        delete[] partial_rx_buf[channel].buf;
-    }
 }
 
 template <class T>
@@ -77,8 +68,6 @@ static void applyQuadDcOffset(T *buf, size_t n, const T *offsets) {
 
 MSDLL rfnm_api_failcode rx_stream::start() {
     rfnm_api_failcode ret = RFNM_API_OK;
-    uint32_t first_phytimer;
-    bool first_phytimer_set = false;
 
     // starting rx worker without any channels streaming will cause errors
     if (channels.size() == 0) return ret;
@@ -109,40 +98,16 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     if (ret) goto error;
 
     // work around stale buffer firmware bug by discarding first few buffers
-    rx_dqbuf_multi(500000);
+    rx_dqbuf_multi(500000, true);
     rx_qbuf_multi();
-    rx_dqbuf_multi(100000);
+    rx_dqbuf_multi(100000, true);
     rx_qbuf_multi();
-    rx_dqbuf_multi(50000);
+    rx_dqbuf_multi(50000, true);
     rx_qbuf_multi();
 
     // First sample can sometimes take a while to come, so fetch it here before normal streaming
     ret = rx_dqbuf_multi(50000, true);
     if (ret) goto error;
-
-    for (uint32_t channel : channels) {
-        struct rx_buf* lrxbuf = pending_rx_buf[channel];
-
-        last_phytimer[channel] = lrxbuf->phytimer;
-
-        // handle staggered ADC start times
-        if (!first_phytimer_set) {
-            first_phytimer = lrxbuf->phytimer;
-            first_phytimer_set = true;
-        } else {
-            int32_t rounding_ticks = phytimer_ticks_per_sample / 2;
-            int32_t samp_delta = static_cast<int32_t>(lrxbuf->phytimer - first_phytimer + rounding_ticks) /
-                                  static_cast<int32_t>(phytimer_ticks_per_sample);
-            spdlog::info("second channel delayed by {} samples", samp_delta);
-            sample_counter[channel] = samp_delta;
-        }
-
-        std::memcpy(partial_rx_buf[channel].buf, lrxbuf->buf, outbufsize);
-        partial_rx_buf[channel].left = outbufsize;
-        partial_rx_buf[channel].offset = 0;
-    }
-
-    rx_qbuf_multi();
 
 error:
     if (ret) {
@@ -193,142 +158,87 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
 
     auto timeout = std::chrono::system_clock::now() + std::chrono::microseconds(timeout_us);
     size_t bytes_per_ele = dev.get_transport_status()->rx_stream_format;
-    size_t read_elems[MAX_RX_CHANNELS] = {};
-    size_t buf_idx = 0;
+    size_t read_elems = 0;
     bool need_more_data = false;
-    bool time_set = false;
-    uint64_t first_sample;
-    size_t first_chan = SIZE_MAX;
 
-    for (uint32_t channel : channels) {
-        if (first_chan == SIZE_MAX) {
-            first_chan = channel;
-        }
-
-        if (partial_rx_buf[channel].left) {
-            size_t can_write_bytes = elems_to_read * bytes_per_ele;
-            if (can_write_bytes > partial_rx_buf[channel].left) {
-                can_write_bytes = partial_rx_buf[channel].left;
-            }
-
-            std::memcpy(((uint8_t*)buffs[buf_idx]), partial_rx_buf[channel].buf + partial_rx_buf[channel].offset, can_write_bytes);
-
-            size_t elems_written = can_write_bytes / bytes_per_ele;
-            read_elems[channel] += elems_written;
-
-            if (!time_set) {
-                first_sample = sample_counter[channel];
-                time_set = true;
-            }
-
-            partial_rx_buf[channel].left -= can_write_bytes;
-            partial_rx_buf[channel].offset += can_write_bytes;
-
-            sample_counter[channel] += elems_written;
-        }
-
-        if (read_elems[channel] < elems_to_read) {
-            need_more_data = true;
-        }
-
-        buf_idx++;
-    }
-
-    while (need_more_data) {
-        uint32_t wait_us = 0;
-        auto time_remaining = timeout - std::chrono::system_clock::now();
-        if (time_remaining > std::chrono::duration<int64_t>::zero()) {
-            wait_us = std::chrono::duration_cast<std::chrono::microseconds>(time_remaining).count();
-        }
-
-        if (rx_dqbuf_multi(wait_us)) {
-            break;
-        }
-
-        // TODO: align buffers for each channel based on phy timer value
-
-        need_more_data = false;
-        buf_idx = 0;
-
+    do {
+        // only copy as many samples as we have ready on all channels
+        size_t samples_avail = SIZE_MAX;
+        size_t samples_to_copy = 0;
         for (uint32_t channel : channels) {
-            uint32_t rounding_ticks = phytimer_ticks_per_sample / 2;
-            uint32_t samp_delta = (pending_rx_buf[channel]->phytimer - last_phytimer[channel] + rounding_ticks) /
-                                  phytimer_ticks_per_sample;
-            last_phytimer[channel] = pending_rx_buf[channel]->phytimer;
-
-            // tolerance of +- 64 samples to deal with phytimer jitter
-            // note that phytimer is dequeue time, subject to interrupt servicing time
-            // phytimer timestamp is at a variable offset from buffer start time
-            if (samp_delta < RFNM_USB_RX_PACKET_ELEM_CNT - 64) {
-                // samples were repeated (strange, shouldn't happen)
-                sample_counter[channel] -= RFNM_USB_RX_PACKET_ELEM_CNT - samp_delta;
-                spdlog::info("channel {} repeat {} samples", channel, RFNM_USB_RX_PACKET_ELEM_CNT - samp_delta);
-            } else if (samp_delta > RFNM_USB_RX_PACKET_ELEM_CNT + 64) {
-                // samples were lost
-                sample_counter[channel] += samp_delta - RFNM_USB_RX_PACKET_ELEM_CNT;
-                spdlog::info("channel {} skip {} samples", channel, samp_delta - RFNM_USB_RX_PACKET_ELEM_CNT);
+            if (samples_left[channel] < samples_avail) {
+                samples_avail = samples_left[channel];
             }
-
-            if (!time_set) {
-                first_sample = sample_counter[channel];
-                time_set = true;
-            }
-
-            size_t overflowing_by_elems = 0;
-            size_t can_copy_bytes = outbufsize;
-
-            if ((read_elems[channel] + RFNM_USB_RX_PACKET_ELEM_CNT) > elems_to_read) {
-
-                overflowing_by_elems = (read_elems[channel] + RFNM_USB_RX_PACKET_ELEM_CNT) - elems_to_read;
-                can_copy_bytes = outbufsize - (overflowing_by_elems * bytes_per_ele);
-            }
-
-            std::memcpy(((uint8_t*)buffs[buf_idx]) + (bytes_per_ele * read_elems[channel]),
-                    pending_rx_buf[channel]->buf, can_copy_bytes);
-
-            if (overflowing_by_elems) {
-                std::memcpy(partial_rx_buf[channel].buf, (pending_rx_buf[channel]->buf + can_copy_bytes),
-                        outbufsize - can_copy_bytes);
-                partial_rx_buf[channel].left = outbufsize - can_copy_bytes;
-                partial_rx_buf[channel].offset = 0;
-            }
-
-            read_elems[channel] += RFNM_USB_RX_PACKET_ELEM_CNT - overflowing_by_elems;
-            sample_counter[channel] += RFNM_USB_RX_PACKET_ELEM_CNT - overflowing_by_elems;
-
-            if (read_elems[channel] < elems_to_read) {
-                need_more_data = true;
-            }
-
-            buf_idx++;
         }
 
-        rx_qbuf_multi();
-    }
-
-    if (time_set) {
-        timestamp_ns = (uint64_t)(first_sample * ns_per_sample);
-        elems_read = read_elems[first_chan];
-    } else {
-        if (first_chan != SIZE_MAX) {
-            timestamp_ns = (uint64_t)(sample_counter[first_chan] * ns_per_sample);
+        if (samples_avail < elems_to_read - read_elems) {
+            need_more_data = true;
+            samples_to_copy = samples_avail;
         } else {
-            timestamp_ns = 0;
+            need_more_data = false;
+            samples_to_copy = elems_to_read - read_elems;
         }
-        elems_read = 0;
-    }
+
+        // copy equal amounts of data for each channel
+        size_t buf_idx = 0;
+        for (uint32_t channel : channels) {
+            size_t ch_samples_to_copy = samples_to_copy;
+            uint8_t *dst = reinterpret_cast<uint8_t *>(buffs[buf_idx++]) + read_elems * bytes_per_ele;
+
+            // large samples_left value means prepend zero padding for alignment purposes
+            if (samples_left[channel] > RFNM_USB_RX_PACKET_ELEM_CNT) {
+                size_t pad_samples = samples_left[channel] - RFNM_USB_RX_PACKET_ELEM_CNT;
+                if (pad_samples > ch_samples_to_copy) {
+                    pad_samples = ch_samples_to_copy;
+                }
+
+                std::memset(dst, 0, pad_samples * bytes_per_ele);
+                dst += pad_samples * bytes_per_ele;
+                samples_left[channel] -= pad_samples;
+                ch_samples_to_copy -= pad_samples;
+            }
+
+            uint8_t *src = pending_rx_buf[channel]->buf +
+                (RFNM_USB_RX_PACKET_ELEM_CNT - samples_left[channel]) * bytes_per_ele;
+            std::memcpy(dst, src, ch_samples_to_copy * bytes_per_ele);
+            samples_left[channel] -= ch_samples_to_copy;
+        }
+
+        read_elems += samples_to_copy;
+
+        if (need_more_data) {
+            uint32_t wait_us = 0;
+            auto time_remaining = timeout - std::chrono::system_clock::now();
+            if (time_remaining > std::chrono::duration<int64_t>::zero()) {
+                wait_us = std::chrono::duration_cast<std::chrono::microseconds>(time_remaining).count();
+            }
+
+            ret = rx_dqbuf_multi(wait_us);
+            if (ret) break;
+        }
+    } while (need_more_data);
+
+    timestamp_ns = (uint64_t)(sample_counter * ns_per_sample);
+    elems_read = read_elems;
+    sample_counter += read_elems;
 
     return ret;
 }
 
-// only return data once a buffer has been dequeued from every active channel
-// TODO: handle dropped/skipped buffers that could result in channel desync
-rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool dc_reset) {
+rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool first) {
     rfnm_api_failcode ret = RFNM_API_OK;
     auto timeout = std::chrono::system_clock::now() + std::chrono::microseconds(timeout_us);
+    const int32_t rounding_ticks = phytimer_ticks_per_sample / 2;
+    uint32_t first_phytimer;
+    bool first_phytimer_set = false;
 
     for (uint32_t channel : channels) {
-        if (pending_rx_buf[channel]) continue;
+        if (samples_left[channel] > 0) continue;
+
+        if (pending_rx_buf[channel]) {
+            dev.rx_qbuf(pending_rx_buf[channel]);
+            pending_rx_buf[channel] = nullptr;
+        }
 
         uint32_t wait_us = 0;
         auto time_remaining = timeout - std::chrono::system_clock::now();
@@ -339,10 +249,12 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool dc_reset) 
         ret = dev.rx_dqbuf(&pending_rx_buf[channel], channel_flags[channel], wait_us);
         if (ret) break;
 
+        samples_left[channel] = RFNM_USB_RX_PACKET_ELEM_CNT;
+
         if (dc_correction[channel]) {
             // periodically recalibrate DC offset to account for drift
-            if ((pending_rx_buf[channel]->usb_cc & 0xF) == 0 || dc_reset) {
-                float filter_factor = dc_reset ? 1.0f : 0.1f;
+            if ((pending_rx_buf[channel]->usb_cc & 0xF) == 0 || first) {
+                float filter_factor = first ? 1.0f : 0.1f;
 
                 switch (dev.get_transport_status()->rx_stream_format) {
                 case STREAM_FORMAT_CS8:
@@ -375,6 +287,49 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool dc_reset) 
                 break;
             }
         }
+
+        if (first) {
+            if (!first_phytimer_set) {
+                first_phytimer = pending_rx_buf[channel]->phytimer;
+                first_phytimer_set = true;
+            } else {
+                int32_t samp_delta = static_cast<int32_t>(pending_rx_buf[channel]->phytimer - first_phytimer + rounding_ticks) /
+                                     static_cast<int32_t>(phytimer_ticks_per_sample);
+                //spdlog::info("second channel delayed by {} samples", samp_delta);
+                samples_left[channel] += samp_delta;
+            }
+        } else {
+            int32_t samp_delta = static_cast<int32_t>(pending_rx_buf[channel]->phytimer - last_phytimer[channel] + rounding_ticks) /
+                                 static_cast<int32_t>(phytimer_ticks_per_sample);
+            int32_t shift_samples = 0;
+
+            // tolerance of +- 64 samples to deal with phytimer jitter
+            // note that phytimer is dequeue time, subject to interrupt servicing time
+            // phytimer timestamp is at a variable offset from buffer start time
+            if (samp_delta < RFNM_USB_RX_PACKET_ELEM_CNT - 64) {
+                // samples were repeated (strange, shouldn't happen)
+                shift_samples = samp_delta - RFNM_USB_RX_PACKET_ELEM_CNT;
+                spdlog::info("channel {} repeat {} samples", channel, -shift_samples);
+
+                if (shift_samples < -RFNM_USB_RX_PACKET_ELEM_CNT) {
+                    shift_samples = 0;
+                    spdlog::info("phytimer flyback ignored");
+                }
+            } else if (samp_delta > RFNM_USB_RX_PACKET_ELEM_CNT + 64) {
+                // samples were lost
+                shift_samples = samp_delta - RFNM_USB_RX_PACKET_ELEM_CNT;
+                spdlog::info("channel {} skip {} samples", channel, shift_samples);
+
+                if (shift_samples > RFNM_USB_RX_PACKET_ELEM_CNT * 16) {
+                    shift_samples = 0;
+                    spdlog::info("phytimer jump ignored");
+                }
+            }
+
+            samples_left[channel] += shift_samples;
+        }
+
+        last_phytimer[channel] = pending_rx_buf[channel]->phytimer;
     }
 
     return ret;
@@ -385,6 +340,7 @@ void rx_stream::rx_qbuf_multi() {
         if (pending_rx_buf[channel]) {
             dev.rx_qbuf(pending_rx_buf[channel]);
             pending_rx_buf[channel] = nullptr;
+            samples_left[channel] = 0;
         }
     }
 }
