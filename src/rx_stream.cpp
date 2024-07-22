@@ -296,7 +296,7 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool first) {
                 int32_t samp_delta = static_cast<int32_t>(pending_rx_buf[channel]->phytimer - first_phytimer + rounding_ticks) /
                                      static_cast<int32_t>(phytimer_ticks_per_sample);
                 //spdlog::info("second channel delayed by {} samples", samp_delta);
-                samples_left[channel] += samp_delta;
+                samples_left[channel] += 55; //samp_delta;
             }
         } else {
             int32_t samp_delta = static_cast<int32_t>(pending_rx_buf[channel]->phytimer - last_phytimer[channel] + rounding_ticks) /
