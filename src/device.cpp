@@ -168,8 +168,6 @@ MSDLL device::~device() {
         i.join();
     }
 
-    delete s;
-
     if (rx_buffers_allocated) {
         rx_flush();
 
@@ -181,6 +179,8 @@ MSDLL device::~device() {
             delete rxbuf;
         }
     }
+
+    delete s;
 
     if (usb_handle->primary) {
         libusb_release_interface(usb_handle->primary, 0);
