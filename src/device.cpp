@@ -168,10 +168,8 @@ MSDLL device::~device() {
         i.join();
     }
 
-    delete s;
-
     if (rx_buffers_allocated) {
-        rx_flush();
+        rx_flush(0);
 
         // no need to take in_mutex as threads are finished
         while (rx_s.in.size()) {
@@ -181,6 +179,8 @@ MSDLL device::~device() {
             delete rxbuf;
         }
     }
+
+    delete s;
 
     if (usb_handle->primary) {
         libusb_release_interface(usb_handle->primary, 0);
