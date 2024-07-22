@@ -3,12 +3,6 @@
 #include "device.h"
 
 namespace rfnm {
-    struct partial_buf {
-        uint8_t* buf;
-        uint32_t left;
-        uint32_t offset;
-    };
-
     union quad_dc_offset {
         int8_t i8[8];
         int16_t i16[8];
@@ -29,7 +23,7 @@ namespace rfnm {
             size_t &elems_read, uint64_t &timestamp_ns, uint32_t timeout_us = 20000);
 
     private:
-        rfnm_api_failcode rx_dqbuf_multi(uint32_t timeout_us, bool dc_reset = false);
+        rfnm_api_failcode rx_dqbuf_multi(uint32_t timeout_us, bool first = false);
         void rx_qbuf_multi();
 
         device &dev;
@@ -39,10 +33,9 @@ namespace rfnm {
         bool stream_active = false;
 
         struct rx_buf * pending_rx_buf[MAX_RX_CHANNELS] = {};
+        uint32_t samples_left[MAX_RX_CHANNELS] = {};
 
-        struct partial_buf partial_rx_buf[MAX_RX_CHANNELS] = {};
-
-        int64_t sample_counter[MAX_RX_CHANNELS] = {};
+        int64_t sample_counter = 0;
         uint32_t last_phytimer[MAX_RX_CHANNELS] = {};
         double ns_per_sample;
         uint32_t phytimer_ticks_per_sample;
