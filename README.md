@@ -1,4 +1,4 @@
-# RFNM Hardware Driver ![CI](https://github.com/AlexandreRouma/librfnm/actions/workflows/build_all.yml/badge.svg)
+# RFNM Hardware Driver ![CI](https://github.com/rfnm/librfnm/actions/workflows/build_all.yml/badge.svg)
 
 This repository contains the code for the driver code in charge of communicating with the RFNM hardware.
 It is important to note that **this driver is a work in progress.**
@@ -33,7 +33,7 @@ vcpkg install libusb:x64-windows spdlog:x64-windows
 Next, cd to a working directory of your chosing and grab the latest driver source code and cd into it. For this you can either download a zip of the code and extract it or use git:
 
 ```
-git clone https://github.com/AlexandreRouma/librfnm
+git clone https://github.com/rfnm/librfnm
 cd librfnm
 ```
 
@@ -70,7 +70,7 @@ For linux, start by installing the dependencies using your package manager. You 
 Next, cd to a working directory of your chosing and grab the latest driver source code and cd into it. For this you can either download a zip of the code and extract it or use git:
 
 ```
-git clone https://github.com/AlexandreRouma/librfnm
+git clone https://github.com/rfnm/librfnm
 cd librfnm
 ```
 
