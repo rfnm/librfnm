@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <librfnm/device.h>
 #include <librfnm/rx_stream.h>
 #include <spdlog/spdlog.h>
@@ -724,7 +725,7 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     //std::lock_guard<std::mutex> lockGuard1(tx_s.cc_mutex);
     std::lock_guard<std::mutex> lockGuard1(s_dev_status_mutex);
 
-    if (tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf > 100) {
+    if (tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf > 200) {
         return RFNM_API_MIN_QBUF_QUEUE_FULL;
     }
 
