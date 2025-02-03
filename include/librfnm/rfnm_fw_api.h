@@ -55,7 +55,7 @@ enum rfnm_ch_stream {
 };
 
 RFNM_PACKED_STRUCT(
-struct rfnm_range_8b {
+	struct rfnm_range_8b {
 	int8_t min;
 	uint8_t max;
 }
@@ -71,8 +71,8 @@ RFNM_PACKED_STRUCT(
 	int64_t freq_max;
 	int64_t freq;
 	int16_t rfic_lpf_bw;
-	int16_t samp_freq_div_m;
-	int16_t samp_freq_div_n;
+	/*int16_t samp_freq_div_m;
+	int16_t samp_freq_div_n;*/
 	int8_t avail;
 	int8_t power;
 	struct rfnm_range_8b power_range;
@@ -96,8 +96,8 @@ RFNM_PACKED_STRUCT(
 	int64_t freq_max;
 	int64_t freq;
 	int16_t rfic_lpf_bw;
-	int16_t samp_freq_div_m;
-	int16_t samp_freq_div_n;
+	/*int16_t samp_freq_div_m;
+	int16_t samp_freq_div_n;*/
 	int8_t avail;
 	int8_t gain;
 	struct rfnm_range_8b gain_range;
@@ -131,6 +131,9 @@ RFNM_PACKED_STRUCT(
 RFNM_PACKED_STRUCT(
 	struct rfnm_dev_hwinfo_clockgen {
 	uint64_t dcs_clk;
+	uint64_t dcs_clk_min;
+	uint64_t dcs_clk_max;
+	uint32_t dcs_clk_step;
 }
 );
 
@@ -180,14 +183,26 @@ RFNM_PACKED_STRUCT(
 
 RFNM_PACKED_STRUCT(
 	struct rfnm_stream_stats {
-	uint64_t usb_tx_ok[2];
-	uint64_t usb_tx_error[2];
+	uint64_t usb_tx_ok[4];
+	uint64_t usb_tx_error[4];
+	uint64_t usb_rx_ok[4];
+	uint64_t usb_rx_error[4];
+	uint64_t usb_rx_bytes[4];
+	uint64_t usb_tx_bytes[4];
 
-	uint64_t usb_rx_ok[2];
-	uint64_t usb_rx_error[2];
+	uint64_t local_tx_ok[4];
+	uint64_t local_tx_error[4];
+	uint64_t local_rx_ok[4];
+	uint64_t local_rx_error[4];
+	uint64_t local_rx_bytes[4];
+	uint64_t local_tx_bytes[4];
 
-	uint64_t usb_rx_bytes[2];
-	uint64_t usb_tx_bytes[2];
+	uint64_t eth_tx_ok[4];
+	uint64_t eth_tx_error[4];
+	uint64_t eth_rx_ok[4];
+	uint64_t eth_rx_error[4];
+	uint64_t eth_rx_bytes[4];
+	uint64_t eth_tx_bytes[4];
 
 	uint64_t la_adc_ok[4];
 	uint64_t la_adc_error[4];
@@ -197,10 +212,20 @@ RFNM_PACKED_STRUCT(
 );
 
 RFNM_PACKED_STRUCT(
+	struct rfnm_local_transport_meminfo {
+	uint64_t local_rx_memaddr;
+	uint64_t local_rx_bufsize;
+	uint64_t local_tx_memaddr;
+	uint64_t local_tx_bufsize;
+}
+);
+
+RFNM_PACKED_STRUCT(
 	struct rfnm_dev_status {
-	struct rfnm_stream_stats stream_stats;
-	struct rfnm_m7_status m7_status;
 	uint64_t usb_dac_last_dqbuf;
+	struct rfnm_stream_stats stream_stats;
+	//struct rfnm_m7_status m7_status;
+
 }
 );
 
@@ -213,6 +238,8 @@ enum rfnm_control_ep {
 	RFNM_GET_SET_RESULT,
 	RFNM_GET_DEV_STATUS,
 	RFNM_GET_SM_RESET,
+	RFNM_GET_LOCAL_MEMINFO,
+	RFNM_SET_DCS,
 };
 
 typedef enum {
@@ -231,17 +258,17 @@ typedef enum {
 	//RFNM_API_DQBUF_UNDERRUN = 7,
 } rfnm_api_failcode;
 
-#define RFNM_RX_USB_BUF_MULTI 128
-#define RFNM_RX_USB_BUF_SIZE 128
-
-#define RFNM_TX_USB_BUF_MULTI 64
-//#define RFNM_TX_USB_BUF_SIZE 128
+#define RFNM_RX_USB_BUF_MULTI 80
+#define RFNM_RX_USB_BUF_SIZE 80
+#define RFNM_TX_USB_BUF_MULTI 80
 
 #define RFNM_LA9310_DMA_RX_SIZE		(256)
 #define LA_RX_BASE_BUFSIZE (4*RFNM_LA9310_DMA_RX_SIZE)
 #define LA_RX_BASE_BUFSIZE_12 ((LA_RX_BASE_BUFSIZE * 3) / 4)
 
-#define RFNM_LA9310_DMA_TX_SIZE		(512)
+#define RFNM_RX_USB_BUF_SIZE_ELEMS (RFNM_LA9310_DMA_RX_SIZE * RFNM_RX_USB_BUF_MULTI)
+
+#define RFNM_LA9310_DMA_TX_SIZE		(256)
 #define LA_TX_BASE_BUFSIZE (4*RFNM_LA9310_DMA_TX_SIZE)
 #define LA_TX_BASE_BUFSIZE_12 ((LA_TX_BASE_BUFSIZE * 3) / 4)
 
@@ -257,7 +284,7 @@ RFNM_PACKED_STRUCT(
 	uint8_t buf[LA_RX_BASE_BUFSIZE_12 * RFNM_RX_USB_BUF_MULTI];
 }
 );
-
+// local transport assumes tx/rx are the same size
 RFNM_PACKED_STRUCT(
 	struct rfnm_tx_usb_buf {
 	uint32_t magic;
@@ -280,3 +307,13 @@ RFNM_PACKED_STRUCT(
 #define RFNM_USB_RX_PACKET_HEAD_SIZE (RFNM_USB_RX_PACKET_SIZE - (LA_RX_BASE_BUFSIZE_12 * RFNM_RX_USB_BUF_MULTI))
 #define RFNM_USB_RX_PACKET_DATA_SIZE (RFNM_USB_RX_PACKET_SIZE - RFNM_USB_RX_PACKET_HEAD_SIZE)
 #define RFNM_USB_RX_PACKET_ELEM_CNT (RFNM_USB_RX_PACKET_DATA_SIZE / 3)
+
+#define RFNM_SYSCTL_TRANSFER_SIZE 1152
+
+#define RFNM_IOCTL_BASE  ( ((3U) << 30) | (('R') << 8) | ( 0U << 0 ) | (RFNM_SYSCTL_TRANSFER_SIZE << 16) )
+#define RFNM_IOCTL_BASE_DATA  ( ((3U) << 30) | (('R') << 8) | ( 0U << 0 ) | (RFNM_USB_TX_PACKET_SIZE << 16) )
+
+#define RFNM_PROTOCOL_VERSION 2
+#define RFNM_UDP_CTRL_PORT 28285
+#define RFNM_UDP_DATA_PORT 28286
+
