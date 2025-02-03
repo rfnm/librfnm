@@ -5,6 +5,8 @@ project(librfnm VERSION 0.2.0)
 option(BUILD_RFNM_UTILS "Build RFNM utilities such as rfnm_info" ON)
 option(INSTALL_UDEV_RULES "Install UDEV rules (Linux only)" ON)
 
+set(ENABLE_ADDRESS_SANITIZER OFF)
+
 # List all source files
 file(GLOB_RECURSE SRC "src/*.cpp")
 
@@ -28,6 +30,8 @@ if (NOT MSVC)
     set_target_properties(rfnm_static PROPERTIES OUTPUT_NAME "rfnm")
 endif ()
 
+add_compile_definitions(SPDLOG_FMT_EXTERNAL=0)
+
 # Find spdlog
 find_package(spdlog CONFIG REQUIRED)
 
@@ -35,10 +39,21 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(libusb REQUIRED IMPORTED_TARGET libusb-1.0)
 
+# Find ASIO
+set(ASIO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/asio")
+include_directories("${ASIO_ROOT}/include")
+add_definitions(-DASIO_STANDALONE)
+
 # Called to configure the object, static and dynamic targets, avoids code duplication
 function(configure_rfnm_target target)
     # Set C++ standard to C++17
     target_compile_features(${target} PUBLIC cxx_std_17)
+
+    if(ENABLE_ADDRESS_SANITIZER)
+        message(STATUS "Address Sanitizer enabled for target ${target}")
+        target_compile_options(${target} PRIVATE -fsanitize=address)
+        target_link_options(${target} PRIVATE -fsanitize=address -static-libasan)
+    endif()
 
     # Include the include folder
     target_include_directories(${target} PUBLIC "include/")
@@ -92,6 +107,9 @@ endif ()
 # Build utils if enabled
 if (BUILD_RFNM_UTILS)
     add_subdirectory("utils/rfnm_info")
+    add_subdirectory("utils/rfnm_tx_sine")
+    add_subdirectory("utils/rfnm_rx")
+    add_subdirectory("utils/rfnm_loopback")
 endif ()
 
 # Create uninstall target

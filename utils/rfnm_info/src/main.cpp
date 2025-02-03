@@ -17,14 +17,14 @@ void dumpHwInfo(const rfnm_dev_hwinfo_bit& info, bool daughterboard, int offset 
         printf("%s* RX Channel Count: %d\n", ofs.c_str(), info.rx_ch_cnt);
         printf("%s* TX Channel Count: %d\n", ofs.c_str(), info.tx_ch_cnt);
     }
-    printf("%s* Temperature:      %d Celcius\n", ofs.c_str(), info.temperature);
+    printf("%s* Temperature:      %d Celsius\n", ofs.c_str(), info.temperature);
 }
 
 int main() {
     // List all available devices
     std::vector<rfnm_dev_hwinfo> list;
     try {
-        list = rfnm::device::find(rfnm::transport::TRANSPORT_USB);
+        list = rfnm::device::find(rfnm::transport::TRANSPORT_FIND);
     }
     catch (const std::exception& e) {
         fprintf(stderr, "Failed to list devices: %s\n", e.what());

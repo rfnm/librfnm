@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
-project(rfnm_info)
+project(rfnm_rx)
 
 # Get source files
 file(GLOB_RECURSE SRC "src/*.cpp")

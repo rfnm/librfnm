@@ -8,6 +8,8 @@
 #include <array>
 #include <vector>
 
+#include <asio.hpp>
+
 #include "constants.h"
 #include "rfnm_fw_api.h"
 
@@ -15,6 +17,16 @@
 #define MSDLL
 #elif defined(_MSC_VER)
 #define MSDLL __declspec(dllexport)
+#endif
+
+#if defined(__GNUC__) && defined(__aarch64__) 
+#include <stdio.h>
+#include <stdlib.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/ioctl.h>
+#include <string.h>
+#define RFNM_COMPILE_LOCAL_TRANSPORT
 #endif
 
 #define RFNM_MHZ_TO_HZ(MHz) (MHz * 1000 * 1000ul)
@@ -124,12 +136,14 @@ namespace rfnm {
         MSDLL const struct rfnm_api_tx_ch * get_tx_channel(uint32_t channel);
         MSDLL uint32_t get_rx_channel_count();
         MSDLL uint32_t get_tx_channel_count();
+        MSDLL rfnm_api_failcode control_transfer(enum rfnm_control_ep type, uint32_t size, uint8_t * buf, uint32_t timeout_ms);
 
         // General setters
-        MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t *bufsize);
+        MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t* bufsize);
+        MSDLL rfnm_api_failcode set_dcs(uint64_t freq, uint32_t timeout_us = 20000);
 
         // RX channel setters
-        MSDLL rfnm_api_failcode set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
+        //MSDLL rfnm_api_failcode set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
         MSDLL rfnm_api_failcode set_rx_channel_freq(uint32_t channel, int64_t freq, bool apply = true);
         MSDLL rfnm_api_failcode set_rx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = true);
         MSDLL rfnm_api_failcode set_rx_channel_gain(uint32_t channel, int8_t gain, bool apply = true);
@@ -142,7 +156,7 @@ namespace rfnm {
         // not exposing setter for data_type because this library only handles complex samples for now
 
         // TX channel setters
-        MSDLL rfnm_api_failcode set_tx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
+        //MSDLL rfnm_api_failcode set_tx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
         MSDLL rfnm_api_failcode set_tx_channel_freq(uint32_t channel, int64_t freq, bool apply = true);
         MSDLL rfnm_api_failcode set_tx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = true);
         MSDLL rfnm_api_failcode set_tx_channel_power(uint32_t channel, int8_t power, bool apply = true);
@@ -172,6 +186,8 @@ namespace rfnm {
         MSDLL static enum rfnm_rf_path string_to_rf_path(std::string path);
         MSDLL static std::string rf_path_to_string(enum rfnm_rf_path path);
 
+        size_t THREAD_COUNT = 16;
+
     private:
         void threadfn(size_t thread_index);
 
@@ -184,7 +200,23 @@ namespace rfnm {
         MSDLL void dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock);
         MSDLL int dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock);
 
+        
+
         _usb_handle *usb_handle = nullptr;
+        int rfnm_ctrl_ep_ioctl;
+
+        std::string rfnm_eth_transport_ip_addr;
+
+        asio::ip::udp::endpoint rfnm_ctrl_ep_udp;
+        std::unique_ptr<asio::io_context> rfnm_ctrl_ioctx_tcp;
+        std::unique_ptr<asio::ip::udp::socket> rfnm_ctrl_socket_udp;
+
+        /*asio::ip::udp::endpoint rfnm_data_ep_udp_tx;
+        asio::ip::udp::endpoint rfnm_data_ep_udp_rx;
+        std::unique_ptr<asio::io_context> rfnm_data_ioctx_tcp;
+        std::unique_ptr<asio::ip::udp::socket> rfnm_data_socket_udp;*/
+
+        
 
         std::mutex s_dev_status_mutex;
         std::mutex s_transport_pp_mutex;
@@ -193,9 +225,9 @@ namespace rfnm {
 
         struct rx_buf_s rx_s = {};
         struct tx_buf_s tx_s = {};
-        struct thread_data_s thread_data[THREAD_COUNT] = {};
+        struct thread_data_s thread_data[MAX_THREAD_COUNT] = {};
 
-        std::array<std::thread, THREAD_COUNT> thread_c{};
+        std::array<std::thread, MAX_THREAD_COUNT> thread_c{};
 
         uint32_t cc_tx = 0;
         uint32_t cc_rx = 0;
@@ -205,4 +237,7 @@ namespace rfnm {
         bool rx_buffers_allocated = false;
         bool stream_format_locked = false;
     };
+
+    std::string compute_broadcast_address(const std::string& ip_str, const std::string& mask_str);
+    static std::string get_broadcast_address();
 }

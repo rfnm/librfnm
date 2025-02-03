@@ -13,17 +13,17 @@ MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
 
     int16_t m = 1, n = 1;
     if (channels.size() > 0) {
-        m = dev.get_rx_channel(channels[0])->samp_freq_div_m;
-        n = dev.get_rx_channel(channels[0])->samp_freq_div_n;
+    //    m = dev.get_rx_channel(channels[0])->samp_freq_div_m;
+    //    n = dev.get_rx_channel(channels[0])->samp_freq_div_n;
     }
 
     // check that all channels have matching sample rates before we allocate anything
     for (uint32_t channel : channels) {
-        if (dev.get_rx_channel(channel)->samp_freq_div_m != m ||
-                dev.get_rx_channel(channel)->samp_freq_div_n != n) {
-            spdlog::error("stream sample rate mismatch");
-            throw std::runtime_error("stream sample rate mismatch");
-        }
+    //    if (dev.get_rx_channel(channel)->samp_freq_div_m != m ||
+    //            dev.get_rx_channel(channel)->samp_freq_div_n != n) {
+    //        spdlog::error("stream sample rate mismatch");
+    //        throw std::runtime_error("stream sample rate mismatch");
+    //    }
     }
 
     phytimer_ticks_per_sample = 4 * n;

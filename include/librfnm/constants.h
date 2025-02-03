@@ -9,7 +9,7 @@ namespace rfnm {
 
     const uint8_t RFNM_B_REQUEST = 100;
 
-    const size_t THREAD_COUNT = 16;
+    const size_t MAX_THREAD_COUNT = 16;
 
     const size_t MIN_RX_BUFCNT = 1000;
     const size_t RX_RECOMB_BUF_LEN = 100;
