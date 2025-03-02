@@ -67,36 +67,45 @@ namespace rfnm {
         }
     };
 
-    struct rx_buf_s {
+    class rx_buf_s {
+    public:
+        rx_buf_s();
+
         std::queue<struct rx_buf*> in;
         std::priority_queue<struct rx_buf*, std::vector<struct rx_buf*>, rx_buf_compare> out[4];
         std::mutex in_mutex;
         std::mutex out_mutex;
         std::condition_variable cv;
-        uint64_t usb_cc[4];
-        uint64_t qbuf_cnt;
+        uint64_t usb_cc[4] = {};
+        uint64_t qbuf_cnt = 0;
 
-        uint64_t usb_cc_benchmark[4];
+        uint64_t usb_cc_benchmark[4] = {};
         std::mutex benchmark_mutex;
-        uint8_t last_benchmark_adc;
+        uint8_t last_benchmark_adc = 0;
     };
 
-    struct tx_buf_s {
+    class tx_buf_s {
+    public:
+        tx_buf_s();
+
         std::queue<struct tx_buf*> in;
         std::queue<struct tx_buf*> out;
         std::mutex in_mutex;
         std::mutex out_mutex;
         //std::mutex cc_mutex;
         std::condition_variable cv;
-        uint64_t usb_cc;
-        uint64_t qbuf_cnt;
+        uint64_t usb_cc = 0;
+        uint64_t qbuf_cnt = 0;
     };
 
-    struct thread_data_s {
-        int ep_id;
-        int tx_active;
-        int rx_active;
-        int shutdown_req;
+    class thread_data_s {
+    public:
+        thread_data_s();
+
+        int ep_id = 0;
+        int tx_active = 0;
+        int rx_active = 0;
+        int shutdown_req = 0;
         std::condition_variable cv;
         std::mutex cv_mutex;
     };
@@ -191,9 +200,9 @@ namespace rfnm {
 
         struct status* s = nullptr;
 
-        struct rx_buf_s rx_s = {};
-        struct tx_buf_s tx_s = {};
-        struct thread_data_s thread_data[THREAD_COUNT] = {};
+        rx_buf_s rx_s;
+        tx_buf_s tx_s;
+        thread_data_s thread_data[THREAD_COUNT];
 
         std::array<std::thread, THREAD_COUNT> thread_c{};
 

@@ -6,6 +6,12 @@
 
 using namespace rfnm;
 
+rx_buf_s::rx_buf_s() {}
+
+tx_buf_s::tx_buf_s() {}
+
+thread_data_s::thread_data_s() {}
+
 struct rfnm::_usb_handle {
     libusb_device_handle* primary{};
     libusb_device_handle* boost{};
