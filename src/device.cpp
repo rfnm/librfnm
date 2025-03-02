@@ -3,6 +3,7 @@
 #include <librfnm/rx_stream.h>
 #include <spdlog/spdlog.h>
 #include <libusb-1.0/libusb.h>
+#include <spdlog/cfg/helpers-inl.h>
 
 using namespace rfnm;
 
