@@ -199,6 +199,7 @@ namespace rfnm {
         MSDLL int single_ch_id_bitmap_to_adc_id(uint8_t ch_ids);
         MSDLL void dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock);
         MSDLL int dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock);
+        MSDLL void reorder_tx_queue_nolock(tx_buf_s &tx_s);
 
         
 

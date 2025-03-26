@@ -40,7 +40,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(libusb REQUIRED IMPORTED_TARGET libusb-1.0)
 
 # Find ASIO
-set(ASIO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/asio")
+set(ASIO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/asio/asio")
 include_directories("${ASIO_ROOT}/include")
 add_definitions(-DASIO_STANDALONE)
 

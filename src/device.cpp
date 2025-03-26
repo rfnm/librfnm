@@ -609,6 +609,28 @@ MSDLL void device::pack_cs16_to_12(uint8_t* dest, uint8_t* src8, int sample_cnt)
 #endif*/
 }
 
+
+void device::reorder_tx_queue_nolock(tx_buf_s &tx_s) {
+    //std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+
+    std::vector<tx_buf*> temp;
+
+    while (!tx_s.in.empty()) {
+        temp.push_back(tx_s.in.front());
+        tx_s.in.pop();
+    }
+
+    std::sort(temp.begin(), temp.end(), [](const tx_buf* a, const tx_buf* b) {
+        return a->usb_cc < b->usb_cc;
+    });
+
+    for (tx_buf* buf : temp) {
+        tx_s.in.push(buf);
+    }
+}
+
+
+
 void device::threadfn(size_t thread_index) {
     struct rfnm_rx_usb_buf* lrxbuf = new rfnm_rx_usb_buf();
     struct rfnm_tx_usb_buf* ltxbuf = new rfnm_tx_usb_buf();
@@ -809,6 +831,13 @@ void device::threadfn(size_t thread_index) {
                 goto read_dev_status;
             }
 
+            // you can have the reorder either here or down there but let's keep it down there for now, mostly untested
+            {
+                //std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+                //reorder_tx_queue_nolock(tx_s);
+            }
+
+            
 
             {
                 std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
@@ -819,6 +848,8 @@ void device::threadfn(size_t thread_index) {
                 buf = tx_s.in.front();
                 tx_s.in.pop();
             }
+
+            
 
             pack_cs16_to_12((uint8_t*)ltxbuf->buf, buf->buf, RFNM_USB_TX_PACKET_ELEM_CNT);
             ltxbuf->dac_cc = buf->dac_cc;
@@ -843,6 +874,7 @@ void device::threadfn(size_t thread_index) {
                     spdlog::error("TX bulk tx fail {} {}", tpm.ep_id, r);
                     std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
                     tx_s.in.push(buf);
+                    reorder_tx_queue_nolock(tx_s);
                     goto read_dev_status;
                 }
 
@@ -850,6 +882,7 @@ void device::threadfn(size_t thread_index) {
                     spdlog::error("thread loop TX usb wrong size, {}, {}", transferred, tpm.ep_id);
                     std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
                     tx_s.in.push(buf);
+                    reorder_tx_queue_nolock(tx_s);
                     goto read_dev_status;
                 }
             }
@@ -857,13 +890,19 @@ void device::threadfn(size_t thread_index) {
             if (s->transport_status.transport == TRANSPORT_LOCAL) {
 #ifdef RFNM_COMPILE_LOCAL_TRANSPORT
                 if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | 0, (uint8_t*)ltxbuf) < 0) {
-                    spdlog::error("thread loop TX busy");
+                    //spdlog::error("thread loop TX busy");
+                    //perror("ioctl failed");
+                    //printf("KO %d\n", ltxbuf->usb_cc);
                     {
                         std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
                         tx_s.in.push(buf);
+                        reorder_tx_queue_nolock(tx_s);
                     }
                     std::this_thread::sleep_for(std::chrono::microseconds(1000));
                     goto read_dev_status;
+                }
+                else {
+                    //printf("ok %d\n", ltxbuf->usb_cc);
                 }
 #endif
             }
@@ -873,6 +912,7 @@ void device::threadfn(size_t thread_index) {
                     spdlog::error("TX UDP queue error");
                     std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
                     tx_s.in.push(buf);
+                    reorder_tx_queue_nolock(tx_s);
                     goto read_dev_status;
                 }
             }
@@ -889,7 +929,7 @@ void device::threadfn(size_t thread_index) {
 read_dev_status:
 
         {
-#if 0
+#if 1
             using std::chrono::high_resolution_clock;
             using std::chrono::duration_cast;
             using std::chrono::duration;
@@ -900,8 +940,13 @@ read_dev_status:
             auto ms_int = duration_cast<milliseconds>(tnow - tlast);
 
             if (1 && ms_int.count() > 5) {
-                if (s_dev_status_mutex.try_lock())
+                //if (s_dev_status_mutex.try_lock())
+                std::unique_lock<std::mutex> lock(s_dev_status_mutex, std::try_to_lock);
+                if(lock)
                 {
+                    //std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
+                    
+
                     struct rfnm_dev_status dev_status[1];
 
                     if (/*(rand() % 10 == 0) ||*/ control_transfer(RFNM_GET_DEV_STATUS, sizeof(struct rfnm_dev_status), (unsigned char*)&dev_status[0], 50) != RFNM_API_OK) {
@@ -923,7 +968,7 @@ read_dev_status:
                         s->last_dev_time = high_resolution_clock::now();
                     }
 
-                    s_dev_status_mutex.unlock();
+                    //s_dev_status_mutex.unlock();
                 }
             }
 #endif        
@@ -1311,7 +1356,7 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     //std::lock_guard<std::mutex> lockGuard1(tx_s.cc_mutex);
     std::lock_guard<std::mutex> lockGuard1(s_dev_status_mutex);
 
-    if (tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf > 200) {
+    if (tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf > 2000) {
         return RFNM_API_MIN_QBUF_QUEUE_FULL;
     }
 

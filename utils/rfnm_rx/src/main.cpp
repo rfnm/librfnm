@@ -32,6 +32,8 @@ int main() {
     //lrfnm->tx_work_start(rfnm::TX_LATENCY_POLICY_RELAXED);
     lrfnm->rx_work_start();
 
+    int dequed = 0;
+    static auto tstart = std::chrono::high_resolution_clock::now();
 
     while (1) {
         struct rfnm::rx_buf* lrxbuf;
@@ -40,8 +42,17 @@ int main() {
 
         while (!lrfnm->rx_dqbuf(&lrxbuf, 0, 0)) {
             lrfnm->rx_qbuf(lrxbuf);
+            dequed++;
+
+            auto tnow = std::chrono::high_resolution_clock::now();
+            auto us_int = std::chrono::duration_cast<std::chrono::microseconds>(tnow - tstart);
+            if (us_int.count() > 1000000) {
+                float sps = (inbufsize * dequed / 4);
+                printf("Dequed: %d RX: %.2f Msps %.2f Mbps\n", dequed, sps / 1000000, (sps * 24) / 1000000);
+                dequed = 0;
+                tstart = tnow;
+            }
         }
-        std::this_thread::sleep_for(std::chrono::microseconds(1000));
     }
 
     return 0;
