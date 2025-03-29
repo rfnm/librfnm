@@ -217,6 +217,7 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
             thread_c[i] = std::thread(&device::threadfn, this, i);
         }
         
+
         // Success
         return;
 
@@ -429,58 +430,66 @@ MSDLL device::~device() {
         thread_data[i].cv.notify_one();
     }
 
-    for (auto& i : thread_c) {
-        i.join();
+    //for (auto& i : thread_c) {
+    //    i.join();
+    //}
+
+    for (int8_t i = 0; i < THREAD_COUNT; i++) {
+        thread_c[i].join();
     }
 
     if (rx_buffers_allocated) {
         rx_flush(0);
-
+        
+        /*
         // no need to take in_mutex as threads are finished
         while (rx_s.in.size()) {
             rx_buf *rxbuf = rx_s.in.front();
             rx_s.in.pop();
             delete[] rxbuf->buf;
             delete rxbuf;
+        } 
+        */           
+    } 
+
+    if (s->transport_status.transport == TRANSPORT_USB) {
+        if (usb_handle->primary) {
+            libusb_release_interface(usb_handle->primary, 0);
+            libusb_close(usb_handle->primary);
         }
+        if (usb_handle->boost) {
+            libusb_release_interface(usb_handle->boost, 0);
+            libusb_close(usb_handle->boost);
+        }
+
+        delete usb_handle;
+        libusb_exit(NULL);
+    }
+
+    if (s->transport_status.transport == TRANSPORT_ETH) {
+        if (rfnm_ctrl_ioctx_tcp)
+            rfnm_ctrl_ioctx_tcp->stop();
+        if (rfnm_ctrl_socket_udp && rfnm_ctrl_socket_udp->is_open()) {
+            std::error_code ec;
+            rfnm_ctrl_socket_udp->close(ec);
+            if (ec) {
+                spdlog::warn("Error closing UDP socket: {}", ec.message());
+            }
+        }
+    
+        /*    if (rfnm_data_ioctx_tcp)
+            rfnm_data_ioctx_tcp->stop();
+
+        if (rfnm_data_socket_udp && rfnm_data_socket_udp->is_open()) {
+            std::error_code ec;
+            rfnm_data_socket_udp->close(ec);
+            if (ec) {
+                spdlog::warn("Error closing UDP socket: {}", ec.message());
+            }
+        }*/
     }
 
     delete s;
-
-    if (usb_handle->primary) {
-        libusb_release_interface(usb_handle->primary, 0);
-        libusb_close(usb_handle->primary);
-    }
-    if (usb_handle->boost) {
-        libusb_release_interface(usb_handle->boost, 0);
-        libusb_close(usb_handle->boost);
-    }
-
-    if (rfnm_ctrl_ioctx_tcp)
-        rfnm_ctrl_ioctx_tcp->stop();
-
-    if (rfnm_ctrl_socket_udp && rfnm_ctrl_socket_udp->is_open()) {
-        std::error_code ec;
-        rfnm_ctrl_socket_udp->close(ec);
-        if (ec) {
-            spdlog::warn("Error closing UDP socket: {}", ec.message());
-        }
-    }
-
-/*    if (rfnm_data_ioctx_tcp)
-        rfnm_data_ioctx_tcp->stop();
-
-    if (rfnm_data_socket_udp && rfnm_data_socket_udp->is_open()) {
-        std::error_code ec;
-        rfnm_data_socket_udp->close(ec);
-        if (ec) {
-            spdlog::warn("Error closing UDP socket: {}", ec.message());
-        }
-    }*/
-
-
-    delete usb_handle;
-    libusb_exit(NULL);
 }
 
 MSDLL bool device::unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt) {
@@ -975,15 +984,15 @@ read_dev_status:
         }
     }
 
-    spdlog::error("exiting thread");
+    //spdlog::error("exiting thread");
     if (lrxbuf) {
         delete lrxbuf;
     }
-    spdlog::error("past delete");
+    //spdlog::error("past delete");
     if (ltxbuf) {
         delete ltxbuf;
     }
-    spdlog::error("past second delete");
+    //spdlog::error("past second delete");
 
     if (s->transport_status.transport == TRANSPORT_ETH) {
         //if (rfnm_data_ioctx_udp)
@@ -1100,6 +1109,17 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
                 goto next; 
             }
 
+            // Ensure we only add each device to the found list once as devices may be available via more than one transport type.
+            for (auto & dev : found) {
+                if (std::memcmp(dev.motherboard.serial_number,
+                    r_hwinfo.motherboard.serial_number,
+                    sizeof(dev.motherboard.serial_number)) == 0){
+                        spdlog::info("Skip USB device (duplicate SN): {}", (char*) r_hwinfo.motherboard.serial_number);
+                        goto next;
+                    }
+
+            }
+            spdlog::info("Add USB device: {}", (char*) r_hwinfo.motherboard.serial_number);
             found.push_back(r_hwinfo);
 
         next:
@@ -1138,6 +1158,16 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
             goto exit_close_local;
         }
 
+        // Ensure we only add each device to the found list once as devices may be available via more than one transport type.
+        for (auto & dev : found) {
+            if (std::memcmp(dev.motherboard.serial_number,
+                r_hwinfo.motherboard.serial_number,
+                sizeof(dev.motherboard.serial_number)) == 0){
+                    spdlog::info("Skip local device (duplicate SN): {}", (char*) r_hwinfo.motherboard.serial_number);
+                    goto exit_close_local;
+                }
+        }
+        spdlog::info("Add local device: {}", (char*) r_hwinfo.motherboard.serial_number);
         found.push_back(r_hwinfo);
         
 exit_close_local:
@@ -1219,6 +1249,18 @@ exit_local:
                     spdlog::error("Protocol version mismatch: received {}, expected {}", mv, RFNM_PROTOCOL_VERSION);
                     goto exit_eth;
                 }
+
+                // Ensure we only add each device to the found list once as devices may be available via more than one transport type.
+                for (auto & dev : found) {
+                    if (std::memcmp(dev.motherboard.serial_number,
+                        r_hwinfo.motherboard.serial_number,
+                        sizeof(dev.motherboard.serial_number)) == 0){
+                            spdlog::info("Skip Network device (duplicate SN): {}", (char*) r_hwinfo.motherboard.serial_number);
+                            goto exit_eth;
+                        }
+                }
+                spdlog::info("Add Network device: {}", (char*) r_hwinfo.motherboard.serial_number);
+
                 found.push_back(r_hwinfo);
             }
             else {
