@@ -39,10 +39,12 @@ int main() {
         struct rfnm::rx_buf* lrxbuf;
         struct rfnm::tx_buf* ltxbuf;
         rfnm_api_failcode err;
+        int dequed_cycle = 0;
 
         while (!lrfnm->rx_dqbuf(&lrxbuf, 0, 0)) {
             lrfnm->rx_qbuf(lrxbuf);
             dequed++;
+            dequed_cycle++;
 
             auto tnow = std::chrono::high_resolution_clock::now();
             auto us_int = std::chrono::duration_cast<std::chrono::microseconds>(tnow - tstart);
@@ -52,6 +54,12 @@ int main() {
                 dequed = 0;
                 tstart = tnow;
             }
+        }
+
+        if (dequed_cycle) {
+            std::this_thread::yield();
+        } else {
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
         }
     }
 

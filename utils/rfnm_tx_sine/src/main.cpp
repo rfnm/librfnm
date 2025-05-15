@@ -8,7 +8,7 @@
 int main() {
 
     auto lrfnm = new rfnm::device(rfnm::TRANSPORT_FIND);
-    lrfnm->set_dcs(122880000 / 1); // for now tx frequency is half this, so max is 61 msps
+    lrfnm->set_dcs(122880000 / 4); // for now tx frequency is half this, so max is 61 msps
 
     lrfnm->set_tx_channel_active(0, RFNM_CH_ON, RFNM_CH_STREAM_ON, false);
     lrfnm->set(rfnm::APPLY_CH0_TX);
@@ -32,7 +32,7 @@ int main() {
         txbuf[i].buf = (uint8_t*)malloc(inbufsize);
         s[i] = txbuf[i].buf;
 
-#if 1
+#if 0
         
         d = (uint16_t*)txbuf[i].buf;
         for (int q = 0; q + 1 < (inbufsize / 2); q += 2) {
@@ -90,18 +90,9 @@ int main() {
             if (!lrfnm->tx_qbuf(ltxbuf)) {
                 if (++ss >= NBUF) ss = 0;
                 ltxqueue.pop();
-
-
                 dequed++;
-
-
-                
-
-
-                
             }
             else {
-                std::this_thread::sleep_for(std::chrono::microseconds(100));
                 break;
             }
         }
@@ -110,6 +101,12 @@ int main() {
             //free(ltxbuf->buf);
             //free(ltxbuf);
             ltxqueue.push(ltxbuf);
+        }
+
+        if (ltxqueue.empty()) {
+            std::this_thread::sleep_for(std::chrono::microseconds(500));
+        } else {
+            std::this_thread::yield();
         }
 
 

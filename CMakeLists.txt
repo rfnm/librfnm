@@ -3,7 +3,17 @@ project(librfnm VERSION 0.2.0)
 
 # Options
 option(BUILD_RFNM_UTILS "Build RFNM utilities such as rfnm_info" ON)
+option(BUILD_RFNM_LOCAL_TRANSPORT "Enable local transport (turn on if compiling on the rfnm device itself)" OFF)
 option(INSTALL_UDEV_RULES "Install UDEV rules (Linux only)" ON)
+
+
+if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
+   AND CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  message(STATUS "GNU/AArch64 detected, defining BUILD_RFNM_LOCAL_TRANSPORT (unset if you are not working on the rfnm device itself)")
+  add_compile_definitions(BUILD_RFNM_LOCAL_TRANSPORT)
+  set(BUILD_RFNM_LOCAL_TRANSPORT ON CACHE BOOL "Enable local transport" FORCE)
+endif()
+
 
 set(ENABLE_ADDRESS_SANITIZER OFF)
 
@@ -14,6 +24,21 @@ file(GLOB_RECURSE SRC "src/*.cpp")
 if (MSVC)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif ()
+
+set(DEVICE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/pack.cpp")
+
+# Apply optimizations to the library is embedded
+
+if(BUILD_RFNM_LOCAL_TRANSPORT)
+  message(STATUS "Adding AArch64 optimization flags to rfnm_obj")
+  set_source_files_properties(${DEVICE_SRC}
+  PROPERTIES
+      COMPILE_FLAGS "-std=c99 -mcpu=cortex-a53 -Wall -Wextra -O3 \
+                      -fopenmp-simd -fdump-tree-vect-details -fopt-info-note-missed"
+  )
+endif()
+
+
 
 # Build objects
 add_library(rfnm_obj OBJECT ${SRC})
@@ -69,6 +94,9 @@ endfunction()
 configure_rfnm_target(rfnm_obj)
 configure_rfnm_target(rfnm_static)
 configure_rfnm_target(rfnm)
+
+
+
 
 # On Windows, the install prefix should default to "C:/Program Files/RFNM" (TODO: Have it default instead of override)
 if (MSVC)

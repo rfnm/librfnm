@@ -19,14 +19,13 @@
 #define MSDLL __declspec(dllexport)
 #endif
 
-#if defined(__GNUC__) && defined(__aarch64__) 
+#ifdef BUILD_RFNM_LOCAL_TRANSPORT
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 #include <string.h>
-#define RFNM_COMPILE_LOCAL_TRANSPORT
 #endif
 
 #define RFNM_MHZ_TO_HZ(MHz) (MHz * 1000 * 1000ul)
