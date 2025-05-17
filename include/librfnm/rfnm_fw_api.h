@@ -222,7 +222,8 @@ RFNM_PACKED_STRUCT(
 
 RFNM_PACKED_STRUCT(
 	struct rfnm_dev_status {
-	uint64_t usb_dac_last_dqbuf;
+	uint64_t usb_dac_last_dqbuf[4];
+	uint64_t usb_adc_last_qbuf[4];
 	struct rfnm_stream_stats stream_stats;
 	//struct rfnm_m7_status m7_status;
 
@@ -240,6 +241,7 @@ enum rfnm_control_ep {
 	RFNM_GET_SM_RESET,
 	RFNM_GET_LOCAL_MEMINFO,
 	RFNM_SET_DCS,
+	RFNM_SET_RX_REPEAT,
 };
 
 typedef enum {

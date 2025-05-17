@@ -394,6 +394,7 @@ exit_local:
 
                 s->transport_status.transport = TRANSPORT_ETH;
                 THREAD_COUNT = 8;
+                //RX_RECOMB_BUF_LEN = MIN_RX_BUFCNT / 3;
 
 
                 if (get(REQ_ALL)) {
@@ -515,6 +516,17 @@ void device::reorder_tx_queue_nolock(tx_buf_s &tx_s) {
         tx_s.in.push(buf);
     }
 }
+#pragma pack(push,1)
+struct retrans_req_entry {
+    uint64_t seq;
+    uint32_t adc;
+};
+#pragma pack(pop)
+
+static std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> last_retx_time;
+static std::mutex last_retx_mutex;
+static constexpr auto RETRANS_BACKOFF = std::chrono::milliseconds(5);
+
 
 
 
@@ -547,10 +559,12 @@ void device::threadfn(size_t thread_index) {
         rfnm_data_socket_udp.set_option(asio::socket_base::receive_buffer_size(1024 * 1024 * 4));
         rfnm_data_socket_udp.set_option(asio::socket_base::send_buffer_size(1024 * 1024 * 4));
 
-        uint8_t empty_packet[1];
-        empty_packet[0] = 0xfe;
-        // give the remote host our current ephimeral port
-        rfnm_data_socket_udp.send_to(asio::buffer(empty_packet, 1), rfnm_data_ep_udp_tx);
+        //if (tpm.rx_active) {
+            uint8_t empty_packet[1];
+            empty_packet[0] = 0xfe;
+            // give the remote host our current ephimeral port
+            rfnm_data_socket_udp.send_to(asio::buffer(empty_packet, 1), rfnm_data_ep_udp_tx);
+        //}
 
         //rfnm_data_socket_udp->bind(rfnm_data_ep_udp_rx);
 
@@ -712,8 +726,14 @@ void device::threadfn(size_t thread_index) {
                     if (rfnm_data_socket_udp.receive(asio::buffer((uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_SIZE)) != RFNM_USB_RX_PACKET_SIZE) {
                         
                         std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
-                        rx_s.in.push(buf); 
+                        rx_s.in.push(buf);
 
+                        goto skip_rx;
+                    }
+
+                    if (rx_s.usb_cc[lrxbuf->adc_id] != UINT64_MAX && lrxbuf->usb_cc < rx_s.usb_cc[lrxbuf->adc_id]) {
+                        std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
+                        rx_s.in.push(buf);
                         goto skip_rx;
                     }
 
@@ -729,6 +749,15 @@ void device::threadfn(size_t thread_index) {
 
                     //spdlog::error("UDP problem: {}", e.what());
                 }
+
+
+
+
+                
+
+
+
+
                 
             }
 
@@ -763,6 +792,11 @@ void device::threadfn(size_t thread_index) {
                 rx_s.cv.notify_one();
                 //}
             }
+
+
+
+
+
         }
 
     skip_rx:
@@ -925,6 +959,92 @@ read_dev_status:
             auto ms_int = duration_cast<milliseconds>(tnow - tlast);
 
             if (1 && ms_int.count() > 5) {
+
+
+               if(s->transport_status.transport == TRANSPORT_ETH){
+
+                // 1) gather missing across all ADCs 0..3
+                std::vector<std::pair<uint64_t, uint8_t>> missing_pairs;
+                for (uint8_t adc = 0; adc <= 3; ++adc) {
+                    auto miss = get_retransmission_list(adc);
+                    for (uint64_t seq : miss) {
+                        missing_pairs.emplace_back(seq, adc);
+                    }
+                }
+
+                // 2) filter out any we NACK’d <5ms ago
+                auto now = std::chrono::steady_clock::now();
+                std::vector<std::pair<uint64_t, uint8_t>> to_request;
+                {
+                    std::lock_guard<std::mutex> lock(last_retx_mutex);
+                    to_request.reserve(missing_pairs.size());
+                    for (auto [seq, adc] : missing_pairs) {
+                        // combine seq+adc into a single key
+                        uint64_t key = (seq << 8) | adc;
+                        auto it = last_retx_time.find(key);
+                        if (it == last_retx_time.end()
+                            || now - it->second >= RETRANS_BACKOFF)
+                        {
+                            last_retx_time[key] = now;
+                            to_request.emplace_back(seq, adc);
+                        }
+                    }
+                }
+
+                static int tokens = 0;
+
+                tokens += 3;
+
+                if (tokens > 10) {
+                    tokens = 10;
+                }
+
+                if (to_request.size() > tokens) {
+                    to_request.resize(tokens);
+                }
+
+                tokens -= to_request.size();
+                
+
+                // 3) cap total NACKs to 3
+                //if (to_request.size() > 5)
+                //    to_request.resize(5);
+
+                // 4) build and send one combined request
+                if (!to_request.empty()) {
+                    std::vector<retrans_req_entry> reqs;
+                    reqs.reserve(to_request.size());
+                    for (auto [seq, adc] : to_request) {
+                        reqs.push_back({ seq, adc });
+                    }
+
+                    auto rc = control_transfer(
+                        RFNM_SET_RX_REPEAT,                     // your retransmit opcode
+                        reqs.size() * sizeof(retrans_req_entry),
+                        reinterpret_cast<uint8_t*>(reqs.data()),
+                        /* timeout_ms */ 50
+                    );
+                }
+
+
+
+            }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
                 //if (s_dev_status_mutex.try_lock())
                 std::unique_lock<std::mutex> lock(s_dev_status_mutex, std::try_to_lock);
                 if(lock)
@@ -1318,7 +1438,7 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
 
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
-        thread_data[i].rx_active = ((i % 2) == 1);
+        thread_data[i].rx_active = s->transport_status.transport == TRANSPORT_LOCAL ? ((i % 2) == 1) : 1;
         thread_data[i].cv.notify_one();
     }
 
@@ -1345,7 +1465,7 @@ MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
 
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
-        thread_data[i].tx_active = ((i % 2) == 0);
+        thread_data[i].tx_active = s->transport_status.transport == TRANSPORT_LOCAL ? ((i % 2) == 0) : 1;
         thread_data[i].cv.notify_one();
     }
 
@@ -1374,7 +1494,7 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     //std::lock_guard<std::mutex> lockGuard1(tx_s.cc_mutex);
     std::lock_guard<std::mutex> lockGuard1(s_dev_status_mutex);
 
-    if (tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf > 2000) {
+    if (tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf[0] > 2000) {
         return RFNM_API_MIN_QBUF_QUEUE_FULL;
     }
 
@@ -1401,6 +1521,46 @@ MSDLL int device::single_ch_id_bitmap_to_adc_id(uint8_t ch_ids) {
     return -1;
 }
 
+MSDLL std::vector<uint64_t> device::get_retransmission_list(uint8_t adc_id) {
+    std::vector<uint64_t> missing;
+    std::lock_guard<std::mutex> lock(rx_s.out_mutex);
+
+    // nothing to do if uninitialized or empty
+    if (rx_s.usb_cc[adc_id] == UINT64_MAX || rx_s.out[adc_id].empty())
+        return missing;
+
+    // only trigger after some buffer has built up
+    if (rx_s.out[adc_id].size() < (RX_RECOMB_BUF_LEN / 2))
+        return missing;
+
+    // make a local copy so we can pop freely
+    auto pq = rx_s.out[adc_id];
+
+    uint64_t next_exp = rx_s.usb_cc[adc_id];
+
+
+    // walk through every packet in ascending CC order
+    while (!pq.empty()) {
+        uint64_t got = pq.top()->usb_cc;
+        pq.pop();
+
+        // if there’s a gap before this packet, fill it in
+        if (got > next_exp) {
+            for (uint64_t seq = next_exp; seq < got; ++seq) {
+                missing.insert(missing.begin(), seq);
+                
+            }
+            return missing;
+            
+        }
+
+        // now expect one past the packet we just saw
+        next_exp = got + 1;
+    }
+
+    return missing;
+}
+
 MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
     if (acquire_lock) {
         rx_s.out_mutex.lock();
@@ -1422,9 +1582,20 @@ MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
         rx_s.out_mutex.unlock();
     }
 
-    spdlog::info("cc {} overwritten to {} at queue size {} adc {}",
-        old_cc, rx_s.usb_cc[adc_id], queue_size, adc_id);
+    rx_s.usb_cc_dropped[adc_id] += (rx_s.usb_cc[adc_id] - old_cc);
+    
+
+    spdlog::info("cc {} -> {} size {} adc {} remote {}; ok {} dropped {} ({:.4f}%)",
+        old_cc, rx_s.usb_cc[adc_id], queue_size, adc_id, s->dev_status.usb_adc_last_qbuf[adc_id], 
+        rx_s.usb_cc_ok[adc_id], rx_s.usb_cc_dropped[adc_id], 
+        
+        rx_s.usb_cc_ok[adc_id] > 0 ? ((100.0 * rx_s.usb_cc_dropped[adc_id] / rx_s.usb_cc_ok[adc_id])) : 0
+        
+        );
 }
+
+
+
 
 MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     struct rx_buf* buf;
@@ -1461,14 +1632,41 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         return ret;
     }
 
+    int max_allowed_in_flight = RX_MAX_INFLIGHT_BUF_CNT;
+    if (s->transport_status.transport == TRANSPORT_ETH) {
+        max_allowed_in_flight = RX_MAX_INFLIGHT_BUF_CNT_ETH;
+    }
+
+
+    if (abs(((int64_t)s->dev_status.usb_adc_last_qbuf[adc_id]) - ((int64_t)rx_s.usb_cc[adc_id])) > max_allowed_in_flight) {
+        spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], s->dev_status.usb_adc_last_qbuf[adc_id]);
+        rx_s.usb_cc[adc_id] = s->dev_status.usb_adc_last_qbuf[adc_id];
+    }
+
+    //static int stale_high_cnt = 0;
+
+    std::vector<uint64_t> discarded;
     while (queue_size > 1) {
-        if (buf->usb_cc < rx_s.usb_cc[adc_id]) {
+        if (buf->usb_cc < rx_s.usb_cc[adc_id] || (/*stale_high_cnt < 4 &&*/ buf->usb_cc >(rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN))) {
+
+            /*if (discarded.empty() && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN)) {
+                stale_high_cnt++;
+                // number of times we ran this cycle and dropped after our cc; 
+                // should happen during init only, so limit it
+            }*/
+
             uint64_t usb_cc = buf->usb_cc;
             std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
             rx_s.out[adc_id].pop();
             rx_s.in.push(buf);
+
+            // do not log stale for eth transport as it could be retransmitted packets
+            if (s->transport_status.transport != TRANSPORT_ETH) {
+                discarded.push_back(buf->usb_cc);
+            }
+            
             queue_size--;
-            spdlog::info("stale cc {} discarded from adc {}", usb_cc, adc_id);
+            //spdlog::info("stale cc {} discarded from adc {}", usb_cc, adc_id);
             buf = rx_s.out[adc_id].top();
         }
         else {
@@ -1476,11 +1674,25 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         }
     };
 
+    
+    
+    if (!discarded.empty()) {
+        // build comma‐separated list
+        std::string list;
+        list.reserve(discarded.size() * 6);
+        for (size_t i = 0; i < discarded.size(); ++i) {
+            if (i) list += ", ";
+            list += std::to_string(discarded[i]);
+        }
+        spdlog::info("stale adc {} cc {}: [{}]", adc_id, rx_s.usb_cc[adc_id], list);
+    }
+
     if (acquire_lock) {
         rx_s.out_mutex.unlock();
     }
 
     if (rx_s.usb_cc[adc_id] == buf->usb_cc) {
+        rx_s.usb_cc_ok[adc_id] ++;
         return 1;
     }
     else {
@@ -1788,7 +2000,7 @@ exit_error_local:
             message[0] = type & 0xff;
 
             memcpy(&message[1], buf, size);
-            rfnm_ctrl_socket_udp->send_to(asio::buffer(message), rfnm_ctrl_ep_udp);
+            rfnm_ctrl_socket_udp->send_to(asio::buffer(message, size + 1), rfnm_ctrl_ep_udp);
             char reply[1152];
             asio::ip::udp::endpoint sender_endpoint;
             //asio::ip::udp::endpoint sender_endpoint(asio::ip::udp::v4()); 
@@ -1833,6 +2045,7 @@ exit_error_local:
             case RFNM_SET_TX_CH_LIST:
             case RFNM_SET_RX_CH_LIST:
             case RFNM_SET_DCS:
+            case RFNM_SET_RX_REPEAT:
                 break;
             }
             return RFNM_API_OK;

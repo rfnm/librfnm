@@ -90,6 +90,9 @@ namespace rfnm {
         uint64_t usb_cc_benchmark[4];
         std::mutex benchmark_mutex;
         uint8_t last_benchmark_adc;
+
+        uint64_t usb_cc_dropped[4];
+        uint64_t usb_cc_ok[4];
     };
 
     struct tx_buf_s {
@@ -199,6 +202,8 @@ namespace rfnm {
         MSDLL void dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock);
         MSDLL int dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock);
         MSDLL void reorder_tx_queue_nolock(tx_buf_s &tx_s);
+
+        MSDLL std::vector<uint64_t> get_retransmission_list(uint8_t adc_id);
 
         
 

@@ -12,7 +12,12 @@ namespace rfnm {
     const size_t MAX_THREAD_COUNT = 16;
 
     const size_t MIN_RX_BUFCNT = 1000;
-    const size_t RX_RECOMB_BUF_LEN = 100;
+    // tmp recomb buf change to test eth
+    const size_t RX_RECOMB_BUF_LEN = 150;
+
+
+    const size_t RX_MAX_INFLIGHT_BUF_CNT = 1000;
+    const size_t RX_MAX_INFLIGHT_BUF_CNT_ETH = 2000;
 
     const uint32_t MAX_RX_CHANNELS = 8;
     const uint32_t MAX_TX_CHANNELS = 1;

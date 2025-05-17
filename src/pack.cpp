@@ -15,9 +15,11 @@ MSDLL bool device::unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_
         //    spdlog::error("RFNM::Conversion::unpack12to16() -> sample_cnt {} is not divisible by 2", sample_cnt);
             return false;
         }
-
+        
+#ifdef __has_builtin
         if (sample_cnt & 255)
             __builtin_unreachable();
+#endif
     
         // process two samples at a time
         sample_cnt = sample_cnt / 2;
