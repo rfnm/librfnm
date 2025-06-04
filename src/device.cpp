@@ -1586,7 +1586,7 @@ MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
     
 
     spdlog::info("cc {} -> {} size {} adc {} remote {}; ok {} dropped {} ({:.4f}%)",
-        old_cc, rx_s.usb_cc[adc_id], queue_size, adc_id, s->dev_status.usb_adc_last_qbuf[adc_id], 
+        old_cc, rx_s.usb_cc[adc_id], queue_size, adc_id, static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[adc_id]),
         rx_s.usb_cc_ok[adc_id], rx_s.usb_cc_dropped[adc_id], 
         
         rx_s.usb_cc_ok[adc_id] > 0 ? ((100.0 * rx_s.usb_cc_dropped[adc_id] / rx_s.usb_cc_ok[adc_id])) : 0
@@ -1639,7 +1639,7 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
 
 
     if (abs(((int64_t)s->dev_status.usb_adc_last_qbuf[adc_id]) - ((int64_t)rx_s.usb_cc[adc_id])) > max_allowed_in_flight) {
-        spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], s->dev_status.usb_adc_last_qbuf[adc_id]);
+        spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[adc_id]));
         rx_s.usb_cc[adc_id] = s->dev_status.usb_adc_last_qbuf[adc_id];
     }
 
