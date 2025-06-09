@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.13)
 project(librfnm VERSION 0.2.0)
 
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE RelWithDebInfo
+      CACHE STRING "Build type: Debug, Release, RelWithDebInfo, MinSizeRel" FORCE)
+endif()
+
 # Options
 option(BUILD_RFNM_UTILS "Build RFNM utilities such as rfnm_info" ON)
 option(BUILD_RFNM_LOCAL_TRANSPORT "Enable local transport (turn on if compiling on the rfnm device itself)" OFF)
@@ -25,14 +30,13 @@ if (MSVC)
     set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 endif ()
 
-set(DEVICE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/pack.cpp")
-
-# Apply optimizations to the library is embedded
+# Apply optimizations to the library if embedded
 
 if(BUILD_RFNM_LOCAL_TRANSPORT)
   message(STATUS "Adding AArch64 optimization flags to rfnm_obj")
-  set_source_files_properties(${DEVICE_SRC}
-  PROPERTIES
+  set_source_files_properties(
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/pack.cpp"
+    PROPERTIES
       COMPILE_FLAGS "-std=c99 -mcpu=cortex-a53 -Wall -Wextra -O3 \
                       -fopenmp-simd -fdump-tree-vect-details -fopt-info-note-missed"
   )

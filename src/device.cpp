@@ -23,7 +23,7 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
     //    throw std::runtime_error("Transport not supported");
     //}
 
-    
+
 
     s = new struct status();
     usb_handle = new _usb_handle;
@@ -166,7 +166,7 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
             delete s;
             throw std::runtime_error("RFNM culdn't find any USB devices");
         }
-        
+
     }
     if (transport == TRANSPORT_LOCAL || transport == TRANSPORT_FIND) {
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
@@ -220,13 +220,13 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
         for (int i = 0; i < THREAD_COUNT; i++) {
             thread_c[i] = std::thread(&device::threadfn, this, i);
         }
-        
+
 
         // Success
         return;
 
     exit_close_local:
-        close(fd); 
+        close(fd);
 #endif
     }
 exit_local:
@@ -293,17 +293,17 @@ exit_local:
             rfnm_dev_hwinfo r_hwinfo;
             if (reply_length == sizeof(rfnm_dev_hwinfo) + 1) {
                 if (reply[0] != (RFNM_GET_DEV_HWINFO & 0xff)) {
-                    spdlog::error("UDP control transfer conflict got {} should have been RFNM_GET_DEV_HWINFO", (uint8_t) reply[0]);
+                    spdlog::error("UDP control transfer conflict got {} should have been RFNM_GET_DEV_HWINFO", (uint8_t)reply[0]);
                     goto exit_eth;
                 }
                 memcpy(&r_hwinfo, &reply[1], sizeof(rfnm_dev_hwinfo));
                 if (r_hwinfo.protocol_version != RFNM_PROTOCOL_VERSION) {
                     uint32_t mv = r_hwinfo.protocol_version;
-                    spdlog::error("Protocol version mismatch: received {}, expected {}",  mv, RFNM_PROTOCOL_VERSION);
+                    spdlog::error("Protocol version mismatch: received {}, expected {}", mv, RFNM_PROTOCOL_VERSION);
                     goto exit_eth;
                 }
 
-                message[0] = ((int) RFNM_GET_SM_RESET) & 0xff;
+                message[0] = ((int)RFNM_GET_SM_RESET) & 0xff;
                 socket.send_to(asio::buffer(message), remote_endpoint);
 
                 rfnm_ctrl_ep_udp = asio::ip::udp::endpoint(asio::ip::make_address(sender_endpoint.address().to_string()), RFNM_UDP_CTRL_PORT);
@@ -368,10 +368,10 @@ exit_local:
 
                 //rfnm_data_socket_udp->bind(rfnm_data_ep_udp_rx);
 
-                
+
 
 #ifdef _WIN32
-                timeout = 50; 
+                timeout = 50;
                 if (setsockopt(rfnm_data_socket_udp->native_handle(), SOL_SOCKET, SO_RCVTIMEO,
                     reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0)
                 {
@@ -445,7 +445,7 @@ MSDLL device::~device() {
 
     if (rx_buffers_allocated) {
         rx_flush(0);
-        
+
         /*
         // no need to take in_mutex as threads are finished
         while (rx_s.in.size()) {
@@ -453,9 +453,9 @@ MSDLL device::~device() {
             rx_s.in.pop();
             delete[] rxbuf->buf;
             delete rxbuf;
-        } 
-        */           
-    } 
+        }
+        */
+    }
 
     if (s->transport_status.transport == TRANSPORT_USB) {
         if (usb_handle->primary) {
@@ -481,7 +481,7 @@ MSDLL device::~device() {
                 spdlog::warn("Error closing UDP socket: {}", ec.message());
             }
         }
-    
+
         /*    if (rfnm_data_ioctx_tcp)
             rfnm_data_ioctx_tcp->stop();
 
@@ -498,7 +498,7 @@ MSDLL device::~device() {
 }
 
 
-void device::reorder_tx_queue_nolock(tx_buf_s &tx_s) {
+void device::reorder_tx_queue_nolock(tx_buf_s& tx_s) {
     //std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
 
     std::vector<tx_buf*> temp;
@@ -510,7 +510,7 @@ void device::reorder_tx_queue_nolock(tx_buf_s &tx_s) {
 
     std::sort(temp.begin(), temp.end(), [](const tx_buf* a, const tx_buf* b) {
         return a->usb_cc < b->usb_cc;
-    });
+        });
 
     for (tx_buf* buf : temp) {
         tx_s.in.push(buf);
@@ -560,10 +560,10 @@ void device::threadfn(size_t thread_index) {
         rfnm_data_socket_udp.set_option(asio::socket_base::send_buffer_size(1024 * 1024 * 4));
 
         //if (tpm.rx_active) {
-            uint8_t empty_packet[1];
-            empty_packet[0] = 0xfe;
-            // give the remote host our current ephimeral port
-            rfnm_data_socket_udp.send_to(asio::buffer(empty_packet, 1), rfnm_data_ep_udp_tx);
+        uint8_t empty_packet[1];
+        empty_packet[0] = 0xfe;
+        // give the remote host our current ephimeral port
+        rfnm_data_socket_udp.send_to(asio::buffer(empty_packet, 1), rfnm_data_ep_udp_tx);
         //}
 
         //rfnm_data_socket_udp->bind(rfnm_data_ep_udp_rx);
@@ -596,17 +596,17 @@ void device::threadfn(size_t thread_index) {
                 // spurious wakeups are acceptable
                 tpm.cv.wait(lk,
                     [this, thread_index] { return thread_data[thread_index].rx_active ||
-                                                  thread_data[thread_index].tx_active ||
-                                                  thread_data[thread_index].shutdown_req; });
+                    thread_data[thread_index].tx_active ||
+                    thread_data[thread_index].shutdown_req; });
             }
         }
 
         if (s->transport_status.transport == TRANSPORT_ETH && (tpm.ep_id % 2) == 0) {
-        //   goto skip_rx;
-            //receiver is blocking, so skip it in half the threads... 
+            //   goto skip_rx;
+                //receiver is blocking, so skip it in half the threads... 
         }
 
-        
+
 
         if (tpm.rx_active) {
             struct rx_buf* buf;
@@ -628,12 +628,15 @@ void device::threadfn(size_t thread_index) {
             {
                 std::unique_lock lk(rx_s.in_mutex);
                 if (rx_s.in.empty()) {
+                    //spdlog::error("rx_s.in.empty()");
                     rx_s.cv.wait_for(lk, std::chrono::microseconds(1000));
                     if (rx_s.in.empty()) {
+                        //int qin = rx_s.in.size();
+                        //spdlog::error("empty -> skipping rx");
                         goto skip_rx;
                     }
                 }
-                
+
                 buf = rx_s.in.front();
                 rx_s.in.pop();
             }
@@ -658,6 +661,7 @@ void device::threadfn(size_t thread_index) {
                     spdlog::error("RX bulk tx fail {} {}", tpm.ep_id, r);
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
+                    rx_s.cv.notify_one();
                     goto skip_rx;
                 }
 
@@ -665,6 +669,7 @@ void device::threadfn(size_t thread_index) {
                     spdlog::error("thread loop RX usb wrong size, {}, {}", transferred, tpm.ep_id);
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
+                    rx_s.cv.notify_one();
                     goto skip_rx;
                 }
             }
@@ -677,6 +682,7 @@ void device::threadfn(size_t thread_index) {
                     {
                         std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                         rx_s.in.push(buf);
+                        rx_s.cv.notify_one();
                     }
                     std::this_thread::sleep_for(std::chrono::microseconds(1000));
                     goto skip_rx;
@@ -684,10 +690,10 @@ void device::threadfn(size_t thread_index) {
 #else
 
                 struct pollfd pfd;
-                pfd.fd     = data_ep_fp;
-                pfd.events = POLLIN;  
+                pfd.fd = data_ep_fp;
+                pfd.events = POLLIN;
 
-                int ret = poll(&pfd, 1, /* timeout_ms= */ 100);
+                int ret = poll(&pfd, 1, /* timeout_ms= */ 5);
                 if (ret < 0) {
                     perror("poll");
                     // handle error…
@@ -695,12 +701,13 @@ void device::threadfn(size_t thread_index) {
                 else if (ret == 0) {
 
                     spdlog::error("rx pool timeout");
-                    
+
                     // timeout
 
                     {
                         std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                         rx_s.in.push(buf);
+                        rx_s.cv.notify_one();
                     }
                     goto skip_rx;
 
@@ -711,8 +718,11 @@ void device::threadfn(size_t thread_index) {
                     // safe to call RX ioctl once
                     if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | 1, (uint8_t*)lrxbuf) < 0) {
                         spdlog::error("RX queue error");
-                    } else {
+                    }
+                    else {
                         // got data in lrxbuf
+                        //spdlog::info("RX {}", static_cast<uint64_t>(lrxbuf->usb_cc));
+
                     }
                 }
 
@@ -724,9 +734,10 @@ void device::threadfn(size_t thread_index) {
             if (s->transport_status.transport == TRANSPORT_ETH) {
                 try {
                     if (rfnm_data_socket_udp.receive(asio::buffer((uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_SIZE)) != RFNM_USB_RX_PACKET_SIZE) {
-                        
+
                         std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                         rx_s.in.push(buf);
+                        rx_s.cv.notify_one();
 
                         goto skip_rx;
                     }
@@ -734,6 +745,7 @@ void device::threadfn(size_t thread_index) {
                     if (rx_s.usb_cc[lrxbuf->adc_id] != UINT64_MAX && lrxbuf->usb_cc < rx_s.usb_cc[lrxbuf->adc_id]) {
                         std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                         rx_s.in.push(buf);
+                        rx_s.cv.notify_one();
                         goto skip_rx;
                     }
 
@@ -746,6 +758,7 @@ void device::threadfn(size_t thread_index) {
                 catch (std::exception& e) {
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
+                    rx_s.cv.notify_one();
 
                     //spdlog::error("UDP problem: {}", e.what());
                 }
@@ -753,12 +766,12 @@ void device::threadfn(size_t thread_index) {
 
 
 
-                
 
 
 
 
-                
+
+
             }
 
 
@@ -766,6 +779,7 @@ void device::threadfn(size_t thread_index) {
                 //spdlog::error("Wrong magic");
                 std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                 rx_s.in.push(buf);
+                rx_s.cv.notify_one();
                 goto skip_rx;
             }
 
@@ -803,10 +817,25 @@ void device::threadfn(size_t thread_index) {
 
         if (tpm.tx_active) {
             struct tx_buf* buf;
-
+#if 0
             if (tx_s.in.empty()) {
                 goto read_dev_status;
             }
+#else
+
+            {
+                std::unique_lock lk(tx_s.in_mutex);
+                if (tx_s.in.empty()) {
+                    //spdlog::error("rx_s.in.empty()");
+                    tx_s.cv.wait_for(lk, std::chrono::microseconds(1000));
+                    if (tx_s.in.empty()) {
+                        goto read_dev_status;
+                    }
+                }
+            }
+
+#endif
+
 
             // you can have the reorder either here or down there but let's keep it down there for now, mostly untested
             {
@@ -814,7 +843,7 @@ void device::threadfn(size_t thread_index) {
                 //reorder_tx_queue_nolock(tx_s);
             }
 
-            
+
 
             {
                 std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
@@ -826,7 +855,7 @@ void device::threadfn(size_t thread_index) {
                 tx_s.in.pop();
             }
 
-            
+
 
             pack_cs16_to_12((uint8_t*)ltxbuf->buf, buf->buf, RFNM_USB_TX_PACKET_ELEM_CNT);
             ltxbuf->dac_cc = buf->dac_cc;
@@ -883,13 +912,13 @@ void device::threadfn(size_t thread_index) {
                     //printf("ok %d\n", ltxbuf->usb_cc);
                 }
 #else
-
+                //spdlog::error("tx loop");
 
                 struct pollfd pfd;
-                pfd.fd     = data_ep_fp;
-                pfd.events = POLLOUT;  
+                pfd.fd = data_ep_fp;
+                pfd.events = POLLOUT;
 
-                int ret = poll(&pfd, 1, /* timeout_ms= */ 100);
+                int ret = poll(&pfd, 1, /* timeout_ms= */ 5);
                 if (ret < 0) {
                     perror("poll");
                     // handle error…
@@ -897,7 +926,7 @@ void device::threadfn(size_t thread_index) {
                 else if (ret == 0) {
 
                     spdlog::error("tx pool timeout");
-                    
+
                     // timeout
 
                     {
@@ -914,7 +943,9 @@ void device::threadfn(size_t thread_index) {
                     // safe to call RX ioctl once
                     if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | 0, (uint8_t*)ltxbuf) < 0) {
                         spdlog::error("TX queue error");
-                    } else {
+                    }
+                    else {
+                        //spdlog::error("tx done");
                         // got data in lrxbuf
                     }
                 }
@@ -936,7 +967,7 @@ void device::threadfn(size_t thread_index) {
                 }
             }
 
-            
+
 
             {
                 std::lock_guard<std::mutex> lockGuard(tx_s.out_mutex);
@@ -945,7 +976,7 @@ void device::threadfn(size_t thread_index) {
             }
         }
 
-read_dev_status:
+    read_dev_status:
 
         {
 #if 1
@@ -961,74 +992,74 @@ read_dev_status:
             if (1 && ms_int.count() > 5) {
 
 
-               if(s->transport_status.transport == TRANSPORT_ETH){
+                if (s->transport_status.transport == TRANSPORT_ETH) {
 
-                // 1) gather missing across all ADCs 0..3
-                std::vector<std::pair<uint64_t, uint8_t>> missing_pairs;
-                for (uint8_t adc = 0; adc <= 3; ++adc) {
-                    auto miss = get_retransmission_list(adc);
-                    for (uint64_t seq : miss) {
-                        missing_pairs.emplace_back(seq, adc);
-                    }
-                }
-
-                // 2) filter out any we NACK’d <5ms ago
-                auto now = std::chrono::steady_clock::now();
-                std::vector<std::pair<uint64_t, uint8_t>> to_request;
-                {
-                    std::lock_guard<std::mutex> lock(last_retx_mutex);
-                    to_request.reserve(missing_pairs.size());
-                    for (auto [seq, adc] : missing_pairs) {
-                        // combine seq+adc into a single key
-                        uint64_t key = (seq << 8) | adc;
-                        auto it = last_retx_time.find(key);
-                        if (it == last_retx_time.end()
-                            || now - it->second >= RETRANS_BACKOFF)
-                        {
-                            last_retx_time[key] = now;
-                            to_request.emplace_back(seq, adc);
+                    // 1) gather missing across all ADCs 0..3
+                    std::vector<std::pair<uint64_t, uint8_t>> missing_pairs;
+                    for (uint8_t adc = 0; adc <= 3; ++adc) {
+                        auto miss = get_retransmission_list(adc);
+                        for (uint64_t seq : miss) {
+                            missing_pairs.emplace_back(seq, adc);
                         }
                     }
-                }
 
-                static int tokens = 0;
-
-                tokens += 3;
-
-                if (tokens > 10) {
-                    tokens = 10;
-                }
-
-                if (to_request.size() > tokens) {
-                    to_request.resize(tokens);
-                }
-
-                tokens -= to_request.size();
-                
-
-                // 3) cap total NACKs to 3
-                //if (to_request.size() > 5)
-                //    to_request.resize(5);
-
-                // 4) build and send one combined request
-                if (!to_request.empty()) {
-                    std::vector<retrans_req_entry> reqs;
-                    reqs.reserve(to_request.size());
-                    for (auto [seq, adc] : to_request) {
-                        reqs.push_back({ seq, adc });
+                    // 2) filter out any we NACK’d <5ms ago
+                    auto now = std::chrono::steady_clock::now();
+                    std::vector<std::pair<uint64_t, uint8_t>> to_request;
+                    {
+                        std::lock_guard<std::mutex> lock(last_retx_mutex);
+                        to_request.reserve(missing_pairs.size());
+                        for (auto [seq, adc] : missing_pairs) {
+                            // combine seq+adc into a single key
+                            uint64_t key = (seq << 8) | adc;
+                            auto it = last_retx_time.find(key);
+                            if (it == last_retx_time.end()
+                                || now - it->second >= RETRANS_BACKOFF)
+                            {
+                                last_retx_time[key] = now;
+                                to_request.emplace_back(seq, adc);
+                            }
+                        }
                     }
 
-                    auto rc = control_transfer(
-                        RFNM_SET_RX_REPEAT,                     // your retransmit opcode
-                        reqs.size() * sizeof(retrans_req_entry),
-                        reinterpret_cast<uint8_t*>(reqs.data()),
-                        /* timeout_ms */ 50
-                    );
+                    static int tokens = 0;
+
+                    tokens += 3;
+
+                    if (tokens > 10) {
+                        tokens = 10;
+                    }
+
+                    if (to_request.size() > tokens) {
+                        to_request.resize(tokens);
+                    }
+
+                    tokens -= to_request.size();
+
+
+                    // 3) cap total NACKs to 3
+                    //if (to_request.size() > 5)
+                    //    to_request.resize(5);
+
+                    // 4) build and send one combined request
+                    if (!to_request.empty()) {
+                        std::vector<retrans_req_entry> reqs;
+                        reqs.reserve(to_request.size());
+                        for (auto [seq, adc] : to_request) {
+                            reqs.push_back({ seq, adc });
+                        }
+
+                        auto rc = control_transfer(
+                            RFNM_SET_RX_REPEAT,                     // your retransmit opcode
+                            reqs.size() * sizeof(retrans_req_entry),
+                            reinterpret_cast<uint8_t*>(reqs.data()),
+                            /* timeout_ms */ 50
+                        );
+                    }
+
+
+
                 }
-
-
-
-            }
 
 
 
@@ -1047,10 +1078,10 @@ read_dev_status:
 
                 //if (s_dev_status_mutex.try_lock())
                 std::unique_lock<std::mutex> lock(s_dev_status_mutex, std::try_to_lock);
-                if(lock)
+                if (lock)
                 {
                     //std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
-                    
+
 
                     struct rfnm_dev_status dev_status[1];
 
@@ -1071,6 +1102,16 @@ read_dev_status:
                     else {
                         memcpy(&s->dev_status, &dev_status[0], sizeof(struct rfnm_dev_status));
                         s->last_dev_time = high_resolution_clock::now();
+                        uint64_t tt = s->dev_status.usb_dac_last_dqbuf[0];
+
+                        /*spdlog::info("control_transfer for RFNM_GET_DEV_STATUS OK {} {} adc {} {} {} {}", tx_s.usb_cc, tt,
+
+                        static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[0]),
+                    static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[1]),
+                static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[2]),
+            static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[3])
+        );*/
+
                     }
 
                     //s_dev_status_mutex.unlock();
@@ -1092,7 +1133,7 @@ read_dev_status:
 
     if (s->transport_status.transport == TRANSPORT_ETH) {
         //if (rfnm_data_ioctx_udp)
-            rfnm_data_ioctx_udp.stop();
+        rfnm_data_ioctx_udp.stop();
 
         if (rfnm_data_socket_udp.is_open()) {
             std::error_code ec;
@@ -1102,7 +1143,7 @@ read_dev_status:
             }
         }
     }
-    
+
 
     if (s->transport_status.transport == TRANSPORT_LOCAL) {
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
@@ -1124,7 +1165,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
     int dev_cnt = 0;
     int r;
     std::vector<struct rfnm_dev_hwinfo> found = {};
-    
+
     if (transport == TRANSPORT_USB || transport == TRANSPORT_FIND) {
         libusb_device** devs = NULL;
 
@@ -1202,20 +1243,20 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
             if (r_hwinfo.protocol_version != RFNM_PROTOCOL_VERSION) {
                 uint32_t pv = r_hwinfo.protocol_version;
                 spdlog::error("RFNM_API_SW_UPGRADE_REQUIRED detected protocol is v{} while your librfnm is for v{}", pv, RFNM_PROTOCOL_VERSION);
-                goto next; 
+                goto next;
             }
 
             // Ensure we only add each device to the found list once as devices may be available via more than one transport type.
-            for (auto & dev : found) {
+            for (auto& dev : found) {
                 if (std::memcmp(dev.motherboard.serial_number,
                     r_hwinfo.motherboard.serial_number,
-                    sizeof(dev.motherboard.serial_number)) == 0){
-                        spdlog::info("Skip USB device (duplicate SN): {}", (char*) r_hwinfo.motherboard.serial_number);
-                        goto next;
-                    }
+                    sizeof(dev.motherboard.serial_number)) == 0) {
+                    spdlog::info("Skip USB device (duplicate SN): {}", (char*)r_hwinfo.motherboard.serial_number);
+                    goto next;
+                }
 
             }
-            spdlog::info("Add USB device: {}", (char*) r_hwinfo.motherboard.serial_number);
+            spdlog::info("Add USB device: {}", (char*)r_hwinfo.motherboard.serial_number);
             found.push_back(r_hwinfo);
 
         next:
@@ -1255,25 +1296,25 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
         }
 
         // Ensure we only add each device to the found list once as devices may be available via more than one transport type.
-        for (auto & dev : found) {
+        for (auto& dev : found) {
             if (std::memcmp(dev.motherboard.serial_number,
                 r_hwinfo.motherboard.serial_number,
-                sizeof(dev.motherboard.serial_number)) == 0){
-                    spdlog::info("Skip local device (duplicate SN): {}", (char*) r_hwinfo.motherboard.serial_number);
-                    goto exit_close_local;
-                }
+                sizeof(dev.motherboard.serial_number)) == 0) {
+                spdlog::info("Skip local device (duplicate SN): {}", (char*)r_hwinfo.motherboard.serial_number);
+                goto exit_close_local;
+            }
         }
-        spdlog::info("Add local device: {}", (char*) r_hwinfo.motherboard.serial_number);
+        spdlog::info("Add local device: {}", (char*)r_hwinfo.motherboard.serial_number);
         found.push_back(r_hwinfo);
-        
-exit_close_local:
+
+    exit_close_local:
         close(fd);
 #endif
     }
 
 exit_local:
     if (transport == TRANSPORT_ETH || transport == TRANSPORT_FIND) {
-        
+
         try {
             asio::io_context io_context;
 
@@ -1336,7 +1377,7 @@ exit_local:
             rfnm_dev_hwinfo r_hwinfo;
             if (reply_length == sizeof(rfnm_dev_hwinfo) + 1) {
                 if (reply[0] != (RFNM_GET_DEV_HWINFO & 0xff)) {
-                    spdlog::error("UDP control transfer conflict got {} should have been RFNM_GET_DEV_HWINFO", (uint8_t) reply[0]);
+                    spdlog::error("UDP control transfer conflict got {} should have been RFNM_GET_DEV_HWINFO", (uint8_t)reply[0]);
                     goto exit_eth;
                 }
                 memcpy(&r_hwinfo, &reply[1], sizeof(rfnm_dev_hwinfo));
@@ -1347,15 +1388,15 @@ exit_local:
                 }
 
                 // Ensure we only add each device to the found list once as devices may be available via more than one transport type.
-                for (auto & dev : found) {
+                for (auto& dev : found) {
                     if (std::memcmp(dev.motherboard.serial_number,
                         r_hwinfo.motherboard.serial_number,
-                        sizeof(dev.motherboard.serial_number)) == 0){
-                            spdlog::info("Skip Network device (duplicate SN): {}", (char*) r_hwinfo.motherboard.serial_number);
-                            goto exit_eth;
-                        }
+                        sizeof(dev.motherboard.serial_number)) == 0) {
+                        spdlog::info("Skip Network device (duplicate SN): {}", (char*)r_hwinfo.motherboard.serial_number);
+                        goto exit_eth;
+                    }
                 }
-                spdlog::info("Add Network device: {}", (char*) r_hwinfo.motherboard.serial_number);
+                spdlog::info("Add Network device: {}", (char*)r_hwinfo.motherboard.serial_number);
 
                 found.push_back(r_hwinfo);
             }
@@ -1371,7 +1412,7 @@ exit_eth:
     return found;
 }
 
-MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, size_t *bufsize) {
+MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, size_t* bufsize) {
     if (stream_format_locked) {
         if (bufsize) {
             *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
@@ -1379,7 +1420,8 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
 
         if (format == s->transport_status.rx_stream_format) {
             return RFNM_API_OK;
-        } else {
+        }
+        else {
             return RFNM_API_NOT_SUPPORTED;
         }
     }
@@ -1404,7 +1446,7 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
     return RFNM_API_OK;
 }
 
-MSDLL rx_stream * device::rx_stream_create(uint8_t ch_ids) {
+MSDLL rx_stream* device::rx_stream_create(uint8_t ch_ids) {
     stream_format_locked = true;
     return new rx_stream(*this, ch_ids);
 }
@@ -1425,7 +1467,7 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
         size_t bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
 
         for (size_t i = 0; i < MIN_RX_BUFCNT; i++) {
-            rx_buf *rxbuf = new rx_buf();
+            rx_buf* rxbuf = new rx_buf();
             rxbuf->buf = new uint8_t[bufsize];
             rx_qbuf(rxbuf, true);
         }
@@ -1439,7 +1481,9 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].rx_active = s->transport_status.transport == TRANSPORT_LOCAL ? ((i % 2) == 1) : 1;
-        thread_data[i].cv.notify_one();
+        //thread_data[i].rx_active = 1;
+        //thread_data[i].cv.notify_one();
+        thread_data[i].cv.notify_all();
     }
 
     return ret;
@@ -1466,7 +1510,9 @@ MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].tx_active = s->transport_status.transport == TRANSPORT_LOCAL ? ((i % 2) == 0) : 1;
-        thread_data[i].cv.notify_one();
+        //thread_data[i].tx_active = 1;
+        //thread_data[i].cv.notify_one();
+        thread_data[i].cv.notify_all();
     }
 
     return ret;
@@ -1483,10 +1529,13 @@ MSDLL rfnm_api_failcode device::tx_work_stop() {
     return ret;
 }
 
-MSDLL rfnm_api_failcode device::rx_qbuf(struct rx_buf * buf, bool new_buffer) {
-    std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
-    if (new_buffer) rx_s.qbuf_cnt++;
-    rx_s.in.push(buf);
+MSDLL rfnm_api_failcode device::rx_qbuf(struct rx_buf* buf, bool new_buffer) {
+    {
+        std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
+        if (new_buffer) rx_s.qbuf_cnt++;
+        rx_s.in.push(buf);
+    }
+    rx_s.cv.notify_one();
     return RFNM_API_OK;
 }
 
@@ -1495,6 +1544,7 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     std::lock_guard<std::mutex> lockGuard1(s_dev_status_mutex);
 
     if (tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf[0] > 2000) {
+        //spdlog::info("RFNM_API_MIN_QBUF_QUEUE_FULL {} {}", tx_s.usb_cc, static_cast<unsigned long>(s->dev_status.usb_dac_last_dqbuf[0]));
         return RFNM_API_MIN_QBUF_QUEUE_FULL;
     }
 
@@ -1505,6 +1555,8 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
 
     buf->usb_cc = (uint32_t)tx_s.usb_cc;
     tx_s.in.push(buf);
+
+    tx_s.cv.notify_one();
 
     return RFNM_API_OK;
 }
@@ -1548,10 +1600,10 @@ MSDLL std::vector<uint64_t> device::get_retransmission_list(uint8_t adc_id) {
         if (got > next_exp) {
             for (uint64_t seq = next_exp; seq < got; ++seq) {
                 missing.insert(missing.begin(), seq);
-                
+
             }
             return missing;
-            
+
         }
 
         // now expect one past the packet we just saw
@@ -1560,7 +1612,6 @@ MSDLL std::vector<uint64_t> device::get_retransmission_list(uint8_t adc_id) {
 
     return missing;
 }
-
 MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
     if (acquire_lock) {
         rx_s.out_mutex.lock();
@@ -1573,7 +1624,8 @@ MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
     // use whatever buffer is at the top of the queue
     if (queue_size) {
         rx_s.usb_cc[adc_id] = rx_s.out[adc_id].top()->usb_cc;
-    } else {
+    }
+    else {
         rx_s.usb_cc[adc_id]++;
     }
 
@@ -1582,18 +1634,20 @@ MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
         rx_s.out_mutex.unlock();
     }
 
-    rx_s.usb_cc_dropped[adc_id] += (rx_s.usb_cc[adc_id] - old_cc);
-    
+    if (rx_s.usb_cc[adc_id] > old_cc) {
+        rx_s.usb_cc_dropped[adc_id] += (rx_s.usb_cc[adc_id] - old_cc);
+    }
+
+
 
     spdlog::info("cc {} -> {} size {} adc {} remote {}; ok {} dropped {} ({:.4f}%)",
         old_cc, rx_s.usb_cc[adc_id], queue_size, adc_id, static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[adc_id]),
-        rx_s.usb_cc_ok[adc_id], rx_s.usb_cc_dropped[adc_id], 
-        
-        rx_s.usb_cc_ok[adc_id] > 0 ? ((100.0 * rx_s.usb_cc_dropped[adc_id] / rx_s.usb_cc_ok[adc_id])) : 0
-        
-        );
-}
+        rx_s.usb_cc_ok[adc_id], rx_s.usb_cc_dropped[adc_id],
 
+        rx_s.usb_cc_ok[adc_id] > 0 ? ((100.0 * rx_s.usb_cc_dropped[adc_id] / rx_s.usb_cc_ok[adc_id])) : 0
+
+    );
+}
 
 
 
@@ -1638,7 +1692,10 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
 
 
-    if (abs(((int64_t)s->dev_status.usb_adc_last_qbuf[adc_id]) - ((int64_t)rx_s.usb_cc[adc_id])) > max_allowed_in_flight) {
+    if (//s->transport_status.transport != TRANSPORT_LOCAL && 
+
+
+        abs(((int64_t)s->dev_status.usb_adc_last_qbuf[adc_id]) - ((int64_t)rx_s.usb_cc[adc_id])) > max_allowed_in_flight) {
         spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[adc_id]));
         rx_s.usb_cc[adc_id] = s->dev_status.usb_adc_last_qbuf[adc_id];
     }
@@ -1647,11 +1704,11 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
 
     std::vector<uint64_t> discarded;
     while (queue_size > 1) {
-        if (buf->usb_cc < rx_s.usb_cc[adc_id] || (/*stale_high_cnt < 4 &&*/ buf->usb_cc >(rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN))) {
+        if ((buf->usb_cc + 1) < rx_s.usb_cc[adc_id] || (/*stale_high_cnt < 4 &&*/ buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN))) {
 
             /*if (discarded.empty() && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN)) {
                 stale_high_cnt++;
-                // number of times we ran this cycle and dropped after our cc; 
+                // number of times we ran this cycle and dropped after our cc;
                 // should happen during init only, so limit it
             }*/
 
@@ -1659,12 +1716,13 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
             rx_s.out[adc_id].pop();
             rx_s.in.push(buf);
+            rx_s.cv.notify_one();
 
             // do not log stale for eth transport as it could be retransmitted packets
             if (s->transport_status.transport != TRANSPORT_ETH) {
                 discarded.push_back(buf->usb_cc);
             }
-            
+
             queue_size--;
             //spdlog::info("stale cc {} discarded from adc {}", usb_cc, adc_id);
             buf = rx_s.out[adc_id].top();
@@ -1674,8 +1732,8 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         }
     };
 
-    
-    
+
+
     if (!discarded.empty()) {
         // build comma‐separated list
         std::string list;
@@ -1684,7 +1742,9 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             if (i) list += ", ";
             list += std::to_string(discarded[i]);
         }
-        spdlog::info("stale adc {} cc {}: [{}]", adc_id, rx_s.usb_cc[adc_id], list);
+        int qout = rx_s.out[adc_id].size();
+        int qin = rx_s.in.size();
+        spdlog::info("stale adc {} cc {} qin {} qout {}: [{}]", adc_id, rx_s.usb_cc[adc_id], qin, qout, list);
     }
 
     if (acquire_lock) {
@@ -1692,7 +1752,7 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
 
     if (rx_s.usb_cc[adc_id] == buf->usb_cc) {
-        rx_s.usb_cc_ok[adc_id] ++;
+        rx_s.usb_cc_ok[adc_id]++;
         return 1;
     }
     else {
@@ -1703,7 +1763,7 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
 }
 
-MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, uint32_t timeout_us) {
+MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, uint32_t timeout_us) {
     int is_single_ch, required_adc_id;
 
     if (rx_s.qbuf_cnt < MIN_RX_BUFCNT) {
@@ -1744,7 +1804,7 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, u
         } while (required_adc_id < 0);
     }
 
-    if(!dqbuf_is_cc_continuous(required_adc_id, 1)) {
+    if (!dqbuf_is_cc_continuous(required_adc_id, 1)) {
         if (!timeout_us) {
             return RFNM_API_DQBUF_NO_DATA;
         }
@@ -1753,7 +1813,7 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf ** buf, uint8_t ch_ids, u
             std::unique_lock lk(rx_s.out_mutex);
             rx_s.cv.wait_for(lk, std::chrono::microseconds(timeout_us),
                 [this, required_adc_id] { return dqbuf_is_cc_continuous(required_adc_id, 0) ||
-                                rx_s.out[required_adc_id].size() > RX_RECOMB_BUF_LEN; }
+                rx_s.out[required_adc_id].size() > RX_RECOMB_BUF_LEN; }
             );
         }
 
@@ -1798,10 +1858,11 @@ MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
         std::lock_guard lock_out(rx_s.out_mutex);
 
         while (rx_s.out[adc_id].size()) {
-            struct rx_buf *buf = rx_s.out[adc_id].top();
+            struct rx_buf* buf = rx_s.out[adc_id].top();
             rx_s.out[adc_id].pop();
             std::lock_guard lock_in(rx_s.in_mutex);
             rx_s.in.push(buf);
+            rx_s.cv.notify_one();
         }
 
         rx_s.usb_cc[adc_id] = UINT64_MAX;
@@ -1846,7 +1907,7 @@ MSDLL enum rfnm_rf_path device::string_to_rf_path(std::string path) {
         return RFNM_PATH_NULL;
     }
 
-    return (enum rfnm_rf_path) (path.c_str()[0] - 'a');
+    return (enum rfnm_rf_path)(path.c_str()[0] - 'a');
 }
 
 MSDLL std::string device::rf_path_to_string(enum rfnm_rf_path path) {
@@ -1945,17 +2006,17 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
         case RFNM_GET_SM_RESET:
         case RFNM_GET_LOCAL_MEMINFO:
             r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
-                type, 0, (unsigned char*) buf, size, timeout_ms);
+                type, 0, (unsigned char*)buf, size, timeout_ms);
             break;
         case RFNM_SET_TX_CH_LIST:
         case RFNM_SET_RX_CH_LIST:
         case RFNM_SET_DCS:
             r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
-                type, 0, (unsigned char*) buf, size, timeout_ms);
+                type, 0, (unsigned char*)buf, size, timeout_ms);
             break;
         }
         if (r < 0) {
-            spdlog::error("libusb_control_transfer for req type {} failed with code {}", (int) type, r);
+            spdlog::error("libusb_control_transfer for req type {} failed with code {}", (int)type, r);
             return RFNM_API_USB_FAIL;
         }
         else {
@@ -1988,7 +2049,7 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
             break;
         }
         return RFNM_API_OK;
-exit_error_local:
+    exit_error_local:
         spdlog::error("ioctl control transfer for req type {} failed with code {}", (int)type, r);
         return RFNM_API_USB_FAIL;
 #endif
@@ -2014,7 +2075,7 @@ exit_error_local:
             case RFNM_GET_DEV_STATUS:
             case RFNM_GET_SM_RESET:
             case RFNM_GET_LOCAL_MEMINFO:
-                
+
                 /*if (type == RFNM_GET_DEV_STATUS) {
                     static int get_some = 0;
                     if (get_some++ > 20) {
@@ -2027,8 +2088,8 @@ exit_error_local:
 
                 reply_length = rfnm_ctrl_socket_udp->receive_from(asio::buffer(reply, 1152), sender_endpoint);
 
-               // spdlog::info("after {}", reply_length);
-                
+                // spdlog::info("after {}", reply_length);
+
                 if (reply[0] != (type & 0xff)) {
                     spdlog::error("UDP control transfer conflict got {} should have been {}", (uint8_t)reply[0], (uint8_t)type);
                     return RFNM_API_USB_FAIL;
@@ -2155,12 +2216,12 @@ MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, ui
             if (r_res.cc_rx == cc_rx && r_res.cc_tx == cc_tx) {
                 for (int q = 0; q < MAX_TX_CHANNELS; q++) {
                     if ((channel_flags[q] & applies_ch_tx) && r_res.tx_ecodes[q]) {
-                        return (rfnm_api_failcode) r_res.tx_ecodes[q];
+                        return (rfnm_api_failcode)r_res.tx_ecodes[q];
                     }
                 }
                 for (int q = 0; q < MAX_RX_CHANNELS; q++) {
                     if ((channel_flags[q] & applies_ch_rx) && r_res.rx_ecodes[q]) {
-                        return (rfnm_api_failcode) r_res.rx_ecodes[q];
+                        return (rfnm_api_failcode)r_res.rx_ecodes[q];
                     }
                 }
                 return RFNM_API_OK;
@@ -2191,48 +2252,52 @@ MSDLL rfnm_api_failcode device::set_dcs(uint64_t freq, uint32_t timeout_us) {
     }
 
     return RFNM_API_OK;
-} 
+}
 
-MSDLL const struct rfnm_dev_hwinfo * device::get_hwinfo() {
+MSDLL const struct rfnm_dev_hwinfo* device::get_hwinfo() {
     return &(s->hwinfo);
 }
 
-MSDLL const struct rfnm_dev_status * device::get_dev_status() {
+MSDLL const struct rfnm_dev_status* device::get_dev_status() {
     return &(s->dev_status);
 }
 
-MSDLL const struct transport_status * device::get_transport_status() {
+MSDLL const struct transport_status* device::get_transport_status() {
     return &(s->transport_status);
 }
 
-MSDLL const struct rfnm_api_rx_ch * device::get_rx_channel(uint32_t channel) {
+MSDLL const struct rfnm_api_rx_ch* device::get_rx_channel(uint32_t channel) {
     if (channel < MAX_RX_CHANNELS) {
         return &(s->rx.ch[channel]);
-    } else {
+    }
+    else {
         return nullptr;
     }
 }
 
-MSDLL const struct rfnm_api_tx_ch * device::get_tx_channel(uint32_t channel) {
+MSDLL const struct rfnm_api_tx_ch* device::get_tx_channel(uint32_t channel) {
     if (channel < MAX_RX_CHANNELS) {
         return &(s->tx.ch[channel]);
-    } else {
+    }
+    else {
         return nullptr;
     }
 }
 
 MSDLL rfnm_api_failcode device::set_rx_channel_active(uint32_t channel, enum rfnm_ch_enable enable,
-        enum rfnm_ch_stream stream, bool apply) {
+    enum rfnm_ch_stream stream, bool apply) {
     if (channel < MAX_RX_CHANNELS) {
         s->rx.ch[channel].enable = enable;
         s->rx.ch[channel].stream = stream;
 
         if (apply) {
             return set(rx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2259,10 +2324,12 @@ MSDLL rfnm_api_failcode device::set_rx_channel_freq(uint32_t channel, int64_t fr
 
         if (apply) {
             return set(rx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2273,10 +2340,12 @@ MSDLL rfnm_api_failcode device::set_rx_channel_rfic_lpf_bw(uint32_t channel, int
 
         if (apply) {
             return set(rx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2287,10 +2356,12 @@ MSDLL rfnm_api_failcode device::set_rx_channel_gain(uint32_t channel, int8_t gai
 
         if (apply) {
             return set(rx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2301,10 +2372,12 @@ MSDLL rfnm_api_failcode device::set_rx_channel_agc(uint32_t channel, enum rfnm_a
 
         if (apply) {
             return set(rx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2315,10 +2388,12 @@ MSDLL rfnm_api_failcode device::set_rx_channel_fm_notch(uint32_t channel, enum r
 
         if (apply) {
             return set(rx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2329,10 +2404,12 @@ MSDLL rfnm_api_failcode device::set_rx_channel_bias_tee(uint32_t channel, enum r
 
         if (apply) {
             return set(rx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2343,26 +2420,30 @@ MSDLL rfnm_api_failcode device::set_rx_channel_path(uint32_t channel, enum rfnm_
 
         if (apply) {
             return set(rx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
 
 MSDLL rfnm_api_failcode device::set_tx_channel_active(uint32_t channel, enum rfnm_ch_enable enable,
-        enum rfnm_ch_stream stream, bool apply) {
+    enum rfnm_ch_stream stream, bool apply) {
     if (channel < MAX_TX_CHANNELS) {
         s->tx.ch[channel].enable = enable;
         s->tx.ch[channel].stream = stream;
 
         if (apply) {
             return set(tx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2388,10 +2469,12 @@ MSDLL rfnm_api_failcode device::set_tx_channel_freq(uint32_t channel, int64_t fr
 
         if (apply) {
             return set(tx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2402,10 +2485,12 @@ MSDLL rfnm_api_failcode device::set_tx_channel_rfic_lpf_bw(uint32_t channel, int
 
         if (apply) {
             return set(tx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2416,10 +2501,12 @@ MSDLL rfnm_api_failcode device::set_tx_channel_power(uint32_t channel, int8_t po
 
         if (apply) {
             return set(tx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2430,10 +2517,12 @@ MSDLL rfnm_api_failcode device::set_tx_channel_bias_tee(uint32_t channel, enum r
 
         if (apply) {
             return set(tx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
@@ -2444,17 +2533,19 @@ MSDLL rfnm_api_failcode device::set_tx_channel_path(uint32_t channel, enum rfnm_
 
         if (apply) {
             return set(tx_channel_apply_flags[channel]);
-        } else {
+        }
+        else {
             return RFNM_API_OK;
         }
-    } else {
+    }
+    else {
         return RFNM_API_NOT_SUPPORTED;
     }
 }
 
 
 MSDLL uint32_t device::get_rx_channel_count() {
-    uint32_t count =  s->hwinfo.daughterboard[0].rx_ch_cnt + s->hwinfo.daughterboard[1].rx_ch_cnt;
+    uint32_t count = s->hwinfo.daughterboard[0].rx_ch_cnt + s->hwinfo.daughterboard[1].rx_ch_cnt;
 
     // should never happen unless firmware malfunctions
     if (count > MAX_RX_CHANNELS) {
@@ -2465,7 +2556,7 @@ MSDLL uint32_t device::get_rx_channel_count() {
 }
 
 MSDLL uint32_t device::get_tx_channel_count() {
-    uint32_t count =  s->hwinfo.daughterboard[0].tx_ch_cnt + s->hwinfo.daughterboard[1].tx_ch_cnt;
+    uint32_t count = s->hwinfo.daughterboard[0].tx_ch_cnt + s->hwinfo.daughterboard[1].tx_ch_cnt;
 
     // should never happen unless firmware malfunctions
     if (count > MAX_TX_CHANNELS) {
