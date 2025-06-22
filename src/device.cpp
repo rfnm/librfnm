@@ -1336,7 +1336,7 @@ exit_local:
 
             asio::ip::udp::socket socket(io_context);
             socket.open(asio::ip::udp::v4());
-
+#if 0
 #ifdef _WIN32
             DWORD timeout = 50; // 10 ms for Windows.
             if (setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
@@ -1354,6 +1354,13 @@ exit_local:
                 spdlog::error("Failed to set receive timeout on Linux/macOS");
             }
 #endif
+#endif
+            // On linux, the asio does not respect the SO_RCVTIMEO option
+            // As a work-around we set the socket to non-blocking mode
+            // and use a sleep to allow the socket to receive the reply.
+            socket.non_blocking(true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
 
             if (!address.length()) {
                 asio::socket_base::broadcast broadcast_option(true);
@@ -1403,6 +1410,16 @@ exit_local:
             else {
                 spdlog::error("Reply too short ({} bytes)", reply_length);
             }
+        }
+        // catch  asio::error::would_block
+        catch (asio::system_error& e) {
+            // Don't log an error for "receive_from: Resource temporarily unavailable" as this is expected
+            if (e.code() != asio::error::would_block) {
+                spdlog::error("UDP control transfer failed: {}", e.what());
+            }
+            //else {
+            //    spdlog::info("UDP control transfer would block, no response received");
+            //}
         }
         catch (std::exception& e) {
             spdlog::error("UDP problem: {}", e.what());
