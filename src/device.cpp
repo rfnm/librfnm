@@ -384,11 +384,11 @@ MSDLL device::~device() {
                 });
 
             if (future.wait_for(std::chrono::milliseconds(500)) == std::future_status::timeout) {
-                fprintf(stderr, "RFNM: Thread %d timed out, detaching\n", i);
+                fprintf(stderr, "thread %d timed out, detaching\n", i);
                 thread_c[i].detach();
             }
             else {
-                fprintf(stderr, "RFNM: Thread %d joined successfully\n", i);
+                fprintf(stderr, "thread %d joined successfully\n", i);
             }
         }
     }
