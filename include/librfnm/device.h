@@ -237,7 +237,7 @@ namespace rfnm {
 
         MSDLL std::vector<uint64_t> get_retransmission_list(uint8_t adc_id);
 
-        MSDLL void device::reset_device_state();
+        MSDLL void reset_device_state();
 
         
 
