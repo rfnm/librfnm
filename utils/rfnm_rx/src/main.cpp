@@ -4,19 +4,46 @@
 
 #define NBUF 1500
 
+std::atomic<bool> shutdown_req(false);
+
+void signal_handler(int signum) {
+    shutdown_req = true;
+}
+
 int main() {
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+#ifdef _WIN32
+    signal(SIGBREAK, signal_handler);
+#endif
+
+    rfnm_api_failcode lret;
+    
 
     auto lrfnm = new rfnm::device(rfnm::TRANSPORT_FIND);
     lrfnm->set_dcs(122880000 / 4);
 
-    lrfnm->set_tx_channel_active(0, RFNM_CH_OFF, RFNM_CH_STREAM_OFF, false);
-    lrfnm->set_rx_channel_active(0, RFNM_CH_ON, RFNM_CH_STREAM_ON, false);
-    lrfnm->set(rfnm::rx_channel_apply_flags[0]);
-    lrfnm->set(rfnm::tx_channel_apply_flags[0]);
+    rfnm::ch_helper rx_ch = lrfnm->rx_ch_helper(1);
+    //rfnm::ch_helper tx_ch = lrfnm->tx_ch_helper(0);
 
-    auto stream_format = rfnm::STREAM_FORMAT_CS16;
+    //lrfnm->set_tx_channel_status(tx_ch.ch_id, RFNM_CH_OFF, RFNM_CH_STREAM_OFF);
+    lrfnm->set_rx_channel_status(rx_ch.id, RFNM_CH_ON, RFNM_CH_STREAM_ON);
 
-    int inbufsize = RFNM_USB_TX_PACKET_ELEM_CNT * lrfnm->get_transport_status()->tx_stream_format;
+    lrfnm->set_rx_channel_freq(rx_ch.id, RFNM_MHZ_TO_HZ(3050));
+
+    //lrfnm->apply(tx_ch.apply);
+    lrfnm->apply(rx_ch.apply);
+
+    if (lret = lrfnm->apply(rx_ch.apply)) {
+        printf("Error applying RX channel configuration: %s (code: %d)\n", rfnm::device::failcode_to_string(lret), lret);
+        return -1;
+    }
+
+    size_t inbufsize;
+    uint8_t bytes_per_ele;
+
+    lrfnm->set_stream_format(rfnm::STREAM_FORMAT_CS16, &inbufsize, &bytes_per_ele);
+    printf("bufsize: %zd, %d bytes per element\n", inbufsize, bytes_per_ele);
 
     std::queue<struct rfnm::tx_buf*> ltxqueue;
 
@@ -35,13 +62,13 @@ int main() {
     int dequed = 0;
     static auto tstart = std::chrono::high_resolution_clock::now();
 
-    while (1) {
+    while (!shutdown_req) {
         struct rfnm::rx_buf* lrxbuf;
         struct rfnm::tx_buf* ltxbuf;
         rfnm_api_failcode err;
         int dequed_cycle = 0;
 
-        while (!lrfnm->rx_dqbuf(&lrxbuf, 0, 0)) {
+        while (!lrfnm->rx_dqbuf(&lrxbuf, rx_ch.mask, 0)) {
             lrfnm->rx_qbuf(lrxbuf);
             dequed++;
             dequed_cycle++;
@@ -63,5 +90,6 @@ int main() {
         }
     }
 
+    delete lrfnm;
     return 0;
 }

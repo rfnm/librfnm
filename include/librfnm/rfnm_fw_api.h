@@ -318,4 +318,12 @@ RFNM_PACKED_STRUCT(
 #define RFNM_PROTOCOL_VERSION 2
 #define RFNM_UDP_CTRL_PORT 28285
 #define RFNM_UDP_DATA_PORT 28286
+#define RFNM_TCP_CTRL_PORT 28287
+#define RFNM_TCP_DATA_PORT 28288
 
+RFNM_PACKED_STRUCT(
+struct rfnm_tcp_ctrl_header {
+	uint8_t cmd;
+	uint16_t size;
+}
+);

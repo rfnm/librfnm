@@ -4,40 +4,44 @@
 
 #define NBUF 1500
 
+std::atomic<bool> shutdown_req(false);
+
+void signal_handler(int signum) {
+    shutdown_req = true;
+}
+
 int main() {
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+#ifdef _WIN32
+    signal(SIGBREAK, signal_handler);
+#endif
 
-
-    /*
-    nasty bug workaround:
-    we use tx/rx streaming status to decide the dcs clock, which is set on the fly by the si5510
-    somehow if we set two different si5510 dcs clock freqs too fast, nothing gets applied
-    when calling ->set(), guess what, we set them in quick succession
-
-    -> set rx first so that it's the same clock as it will be in the near future when tx's set gets called
-    */
+    rfnm_api_failcode lret;
 
     auto lrfnm = new rfnm::device(rfnm::TRANSPORT_FIND);
 
-    // set dcs clock to 61 msps
+    rfnm::ch_helper rx_ch = lrfnm->rx_ch_helper(1);
+    rfnm::ch_helper tx_ch = lrfnm->tx_ch_helper(0);
 
-    //lrfnm->set_dcs(122880000 / 16);
-    //lrfnm->set_rx_channel_active(0, RFNM_CH_ON, RFNM_CH_STREAM_ON, false);
-    //lrfnm->set(rfnm::rx_channel_apply_flags[0]);
-
-    // clock already set to 61, enable tx
     lrfnm->set_dcs(122880000 / 4);
 
-    lrfnm->set_tx_channel_active(0, RFNM_CH_ON, RFNM_CH_STREAM_ON, false);
-    lrfnm->set_rx_channel_active(1, RFNM_CH_ON, RFNM_CH_STREAM_ON, false);
+    lrfnm->set_tx_channel_status(tx_ch.id, RFNM_CH_ON, RFNM_CH_STREAM_ON);
+    lrfnm->set_rx_channel_status(rx_ch.id, RFNM_CH_ON, RFNM_CH_STREAM_ON);
 
-    lrfnm->set_tx_channel_freq(0, RFNM_MHZ_TO_HZ(3050), false);
-    lrfnm->set_rx_channel_freq(1, RFNM_MHZ_TO_HZ(3050), false);
+    lrfnm->set_tx_channel_freq(tx_ch.id, RFNM_MHZ_TO_HZ(3050));
+    lrfnm->set_rx_channel_freq(rx_ch.id, RFNM_MHZ_TO_HZ(3050));
 
-    lrfnm->set(rfnm::APPLY_CH1_RX | rfnm::APPLY_CH0_TX);
+    if (lret = lrfnm->apply(rx_ch.apply | tx_ch.apply)) {
+        printf("Error applying TX/RX channel configuration: %s (code: %d)\n", rfnm::device::failcode_to_string(lret), lret);
+        return -1;
+    }
 
-    auto stream_format = rfnm::STREAM_FORMAT_CS16;
+    size_t inbufsize;
+    uint8_t bytes_per_ele;
 
-    int inbufsize = RFNM_USB_TX_PACKET_ELEM_CNT * lrfnm->get_transport_status()->tx_stream_format;
+    lrfnm->set_stream_format(rfnm::STREAM_FORMAT_CS16, &inbufsize, &bytes_per_ele);
+    printf("bufsize: %zd, %d bytes per element\n", inbufsize, bytes_per_ele);
 
     std::queue<struct rfnm::tx_buf*> ltxqueue;
 
@@ -54,12 +58,12 @@ int main() {
     static auto tstart = std::chrono::high_resolution_clock::now();
 
     std::queue<rfnm::tx_buf*> tx_queue;
-    while (true) {
+    while (!shutdown_req) {
         rfnm::rx_buf* rxb;
         rfnm::tx_buf* txb;
         int dequed_cycle = 0;
 
-        while (!lrfnm->rx_dqbuf(&rxb, 0, 0) /*&& dequed_cycle < 10*/) {
+        while (!lrfnm->rx_dqbuf(&rxb, rx_ch.mask, 0) /*&& dequed_cycle < 10*/) {
             txb = (rfnm::tx_buf*)rxb;
             tx_queue.push(txb);
             dequed_cycle++;
@@ -102,6 +106,6 @@ int main() {
 
 
 
-
+    delete lrfnm;
     return 0;
 }

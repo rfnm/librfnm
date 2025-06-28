@@ -84,7 +84,7 @@ MSDLL rfnm_api_failcode rx_stream::start() {
             goto error;
         }
 
-        dev.set_rx_channel_active(channel, RFNM_CH_ON, RFNM_CH_STREAM_AUTO, false);
+        dev.set_rx_channel_status(channel, RFNM_CH_ON, RFNM_CH_STREAM_AUTO, false);
         apply_mask |= rx_channel_apply_flags[channel];
         chan_mask |= channel_flags[channel];
     }
@@ -94,7 +94,7 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     if (ret) goto error;
 
     // start ADCs
-    ret = dev.set(apply_mask);
+    ret = dev.apply(apply_mask);
     if (ret) goto error;
 
     // work around stale buffer firmware bug by discarding first few buffers
@@ -131,11 +131,11 @@ MSDLL rfnm_api_failcode rx_stream::stop() {
     uint16_t apply_mask = 0;
     uint8_t chan_mask = 0;
     for (uint32_t channel : channels) {
-        dev.set_rx_channel_active(channel, RFNM_CH_OFF, RFNM_CH_STREAM_AUTO, false);
+        dev.set_rx_channel_status(channel, RFNM_CH_OFF, RFNM_CH_STREAM_AUTO, false);
         apply_mask |= rx_channel_apply_flags[channel];
         chan_mask |= channel_flags[channel];
     }
-    ret = dev.set(apply_mask);
+    ret = dev.apply(apply_mask);
 
     // flush buffers
     dev.rx_flush(0, chan_mask);
