@@ -120,6 +120,7 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
                 spdlog::error("Couldn't reset state machine");
                 goto next;
             }
+            reset_device_state();
 
             s->transport_status.transport = TRANSPORT_USB;
             THREAD_COUNT = MAX_THREAD_COUNT;
@@ -202,6 +203,7 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
             spdlog::error("Couldn't reset state machine");
             goto exit_close_local;
         }
+        reset_device_state();
 
         s->transport_status.transport = TRANSPORT_LOCAL;
         THREAD_COUNT = 2;
@@ -230,7 +232,7 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
 #endif
     }
 exit_local:
-    if (transport == TRANSPORT_ETH || transport == TRANSPORT_FIND) {
+    if (transport == TRANSPORT_TCP || transport == TRANSPORT_FIND) {
         try {
 
             asio::io_context io_context;
@@ -255,7 +257,7 @@ exit_local:
             socket.open(asio::ip::udp::v4());
 
 #ifdef _WIN32
-            DWORD timeout = 50; // 10 ms for Windows.
+            DWORD timeout = 150; // 10 ms for Windows.
             if (setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
                 reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0)
             {
@@ -264,7 +266,7 @@ exit_local:
 #else
             struct timeval tv;
             tv.tv_sec = 0;
-            tv.tv_usec = 50000; // 10,000 microseconds = 10 ms.
+            tv.tv_usec = 150*1000; // 10,000 microseconds = 10 ms.
             if (setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
                 &tv, sizeof(tv)) < 0)
             {
@@ -303,99 +305,35 @@ exit_local:
                     goto exit_eth;
                 }
 
-                message[0] = ((int)RFNM_GET_SM_RESET) & 0xff;
-                socket.send_to(asio::buffer(message), remote_endpoint);
-
-                rfnm_ctrl_ep_udp = asio::ip::udp::endpoint(asio::ip::make_address(sender_endpoint.address().to_string()), RFNM_UDP_CTRL_PORT);
-                rfnm_ctrl_ioctx_tcp = std::make_unique<asio::io_context>();
-                rfnm_ctrl_socket_udp = std::make_unique<asio::ip::udp::socket>(*rfnm_ctrl_ioctx_tcp);
-                rfnm_ctrl_socket_udp->open(asio::ip::udp::v4());
-
-                rfnm_ctrl_socket_udp->set_option(asio::socket_base::receive_buffer_size(1024 * 1024 * 4));
-                rfnm_ctrl_socket_udp->set_option(asio::socket_base::send_buffer_size(1024 * 1024 * 4));
-
-#ifdef _WIN32
-                DWORD timeout = 50; // 10 ms for Windows.
-                if (setsockopt(rfnm_ctrl_socket_udp->native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-                    reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0)
-                {
-                    spdlog::error("Failed to set receive timeout on Windows");
-                }
-#else
-                struct timeval tv;
-                tv.tv_sec = 0;
-                tv.tv_usec = 50000; // 10,000 microseconds = 10 ms.
-                if (setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-                    &tv, sizeof(tv)) < 0)
-                {
-                    spdlog::error("Failed to set receive timeout on Linux/macOS");
-                }
-#endif
-#if 0
-                rfnm_data_ep_udp_tx = asio::ip::udp::endpoint(asio::ip::make_address(sender_endpoint.address().to_string()), RFNM_UDP_DATA_PORT);
-                //rfnm_data_ep_udp_rx = asio::ip::udp::endpoint(asio::ip::udp::v4(), RFNM_UDP_DATA_PORT);
-
-                rfnm_data_ioctx_tcp = std::make_unique<asio::io_context>();
-                rfnm_data_socket_udp = std::make_unique<asio::ip::udp::socket>(*rfnm_data_ioctx_tcp);
-                rfnm_data_socket_udp->open(asio::ip::udp::v4());
-
-                //rfnm_data_socket_udp->set_option(asio::socket_base::receive_buffer_size(1024 * 1024 * 4));
-                //rfnm_data_socket_udp->set_option(asio::socket_base::send_buffer_size(1024 * 1024 * 4));
-
-
-                asio::error_code ec;
-
-                rfnm_data_socket_udp->set_option(asio::socket_base::receive_buffer_size(1024 * 1024 * 64), ec);
-                if (ec) {
-                    spdlog::error("Error setting SO_RCVBUF: {} ", ec.message());
-                }
-
-                rfnm_data_socket_udp->set_option(asio::socket_base::send_buffer_size(1024 * 1024 * 64), ec);
-                if (ec) {
-                    spdlog::error("Error setting SO_RCVBUF: {}", ec.message());
-                }
-
-
-
-
-                asio::ip::udp::endpoint remote_endpoint_data(asio::ip::make_address(remote_addr), RFNM_UDP_DATA_PORT);
-                uint8_t empty_packet[1];
-                empty_packet[0] = 0xfe;
-                // give the remote host our current ephimeral port
-                rfnm_data_socket_udp->send_to(asio::buffer(empty_packet, 1), remote_endpoint_data);
-                rfnm_data_socket_udp->send_to(asio::buffer(empty_packet, 1), remote_endpoint_data);
-                rfnm_data_socket_udp->send_to(asio::buffer(empty_packet, 1), remote_endpoint_data);
-
-                //rfnm_data_socket_udp->bind(rfnm_data_ep_udp_rx);
-
-
-
-#ifdef _WIN32
-                timeout = 50;
-                if (setsockopt(rfnm_data_socket_udp->native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-                    reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0)
-                {
-                    spdlog::error("Failed to set receive timeout on Windows");
-                }
-#else
-                //struct timeval tv;
-                tv.tv_sec = 0;
-                tv.tv_usec = 50000; // 10,000 microseconds = 10 ms.
-                if (setsockopt(rfnm_data_socket_udp.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-                    &tv, sizeof(tv)) < 0)
-                {
-                    spdlog::error("Failed to set receive timeout on Linux/macOS");
-                }
-#endif
-#else
+                // CHANGED: Store the discovered IP address for TCP connections
                 rfnm_eth_transport_ip_addr = sender_endpoint.address().to_string();
-#endif
-                s->transport_status.theoretical_mbps = 123;
 
-                s->transport_status.transport = TRANSPORT_ETH;
-                THREAD_COUNT = 8;
-                //RX_RECOMB_BUF_LEN = MIN_RX_BUFCNT / 3;
+                // CHANGED: Create TCP sockets instead of UDP for control and data
+                rfnm_ctrl_ioctx_tcp = std::make_unique<asio::io_context>();
+                rfnm_ctrl_socket_tcp = std::make_unique<asio::ip::tcp::socket>(*rfnm_ctrl_ioctx_tcp);
 
+                // Connect to TCP control port
+                asio::ip::tcp::endpoint tcp_ctrl_ep(asio::ip::make_address(rfnm_eth_transport_ip_addr), RFNM_TCP_CTRL_PORT);
+                rfnm_ctrl_socket_tcp->connect(tcp_ctrl_ep);
+
+                spdlog::info("Connected TCP control to {}:{}", rfnm_eth_transport_ip_addr, RFNM_TCP_CTRL_PORT);
+
+                // Set TCP nodelay for control socket
+                rfnm_ctrl_socket_tcp->set_option(asio::ip::tcp::no_delay(true));
+
+                s->transport_status.theoretical_mbps = 1000;
+                s->transport_status.transport = TRANSPORT_TCP;
+                THREAD_COUNT = 2;
+
+               
+                uint8_t dummy_buf[10];
+                if (control_transfer(RFNM_GET_SM_RESET, 1, dummy_buf, 50) != RFNM_API_OK) {
+                    spdlog::error("Failed to reset state machine");
+                    goto exit_eth;
+                }
+                spdlog::info("State machine reset via TCP control channel");
+                reset_device_state();
+                
 
                 if (get(REQ_ALL)) {
                     goto exit_eth;
@@ -427,75 +365,74 @@ exit_eth:
 }
 
 MSDLL device::~device() {
+    printf("exiting step 1\n");
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].rx_active = 0;
         thread_data[i].tx_active = 0;
         thread_data[i].shutdown_req = 1;
-        thread_data[i].cv.notify_one();
+        thread_data[i].cv.notify_all();
     }
 
-    //for (auto& i : thread_c) {
-    //    i.join();
-    //}
 
+    printf("exiting step 2\n");
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
-        thread_c[i].join();
-    }
+        if (thread_c[i].joinable()) {
+            // Use async to implement timeout
+            auto future = std::async(std::launch::async, [&]() {
+                thread_c[i].join();
+                });
 
+            if (future.wait_for(std::chrono::milliseconds(500)) == std::future_status::timeout) {
+                fprintf(stderr, "RFNM: Thread %d timed out, detaching\n", i);
+                thread_c[i].detach();
+            }
+            else {
+                fprintf(stderr, "RFNM: Thread %d joined successfully\n", i);
+            }
+        }
+    }
+    printf("exiting step 3\n");
+
+    // Clean up buffers
     if (rx_buffers_allocated) {
         rx_flush(0);
-
-        /*
-        // no need to take in_mutex as threads are finished
-        while (rx_s.in.size()) {
-            rx_buf *rxbuf = rx_s.in.front();
-            rx_s.in.pop();
-            delete[] rxbuf->buf;
-            delete rxbuf;
-        }
-        */
     }
+    printf("exiting step 4\n");
 
     if (s->transport_status.transport == TRANSPORT_USB) {
-        if (usb_handle->primary) {
+
+        
+
+
+        if (usb_handle && usb_handle->primary) {
             libusb_release_interface(usb_handle->primary, 0);
             libusb_close(usb_handle->primary);
         }
-        if (usb_handle->boost) {
+        if (usb_handle && usb_handle->boost) {
             libusb_release_interface(usb_handle->boost, 0);
             libusb_close(usb_handle->boost);
         }
-
         delete usb_handle;
         libusb_exit(NULL);
     }
+    printf("exiting step 5\n");
 
-    if (s->transport_status.transport == TRANSPORT_ETH) {
+    if (s->transport_status.transport == TRANSPORT_TCP) {
         if (rfnm_ctrl_ioctx_tcp)
             rfnm_ctrl_ioctx_tcp->stop();
-        if (rfnm_ctrl_socket_udp && rfnm_ctrl_socket_udp->is_open()) {
+        if (rfnm_ctrl_socket_tcp && rfnm_ctrl_socket_tcp->is_open()) {
             std::error_code ec;
-            rfnm_ctrl_socket_udp->close(ec);
-            if (ec) {
-                spdlog::warn("Error closing UDP socket: {}", ec.message());
-            }
+            rfnm_ctrl_socket_tcp->close(ec);
         }
-
-        /*    if (rfnm_data_ioctx_tcp)
-            rfnm_data_ioctx_tcp->stop();
-
-        if (rfnm_data_socket_udp && rfnm_data_socket_udp->is_open()) {
-            std::error_code ec;
-            rfnm_data_socket_udp->close(ec);
-            if (ec) {
-                spdlog::warn("Error closing UDP socket: {}", ec.message());
-            }
-        }*/
     }
 
     delete s;
 }
+
+static std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> last_retx_time;
+static std::mutex last_retx_mutex;
+static constexpr auto RETRANS_BACKOFF = std::chrono::milliseconds(5);
 
 
 void device::reorder_tx_queue_nolock(tx_buf_s& tx_s) {
@@ -523,11 +460,6 @@ struct retrans_req_entry {
 };
 #pragma pack(pop)
 
-static std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> last_retx_time;
-static std::mutex last_retx_mutex;
-static constexpr auto RETRANS_BACKOFF = std::chrono::milliseconds(5);
-
-
 
 
 void device::threadfn(size_t thread_index) {
@@ -547,46 +479,56 @@ void device::threadfn(size_t thread_index) {
     }
 #endif
 
-    asio::ip::udp::endpoint rfnm_data_ep_udp_tx;
-    asio::ip::udp::endpoint rfnm_data_ep_udp_rx;
-    asio::io_context rfnm_data_ioctx_udp;
-    asio::ip::udp::socket rfnm_data_socket_udp(rfnm_data_ioctx_udp);
+    // CHANGED: TCP socket for data instead of UDP
+    asio::ip::tcp::endpoint rfnm_data_ep_tcp;
+    asio::io_context rfnm_data_ioctx_tcp;
+    asio::ip::tcp::socket rfnm_data_socket_tcp(rfnm_data_ioctx_tcp);
 
-    if (s->transport_status.transport == TRANSPORT_ETH) {
-        rfnm_data_ep_udp_tx = asio::ip::udp::endpoint(asio::ip::make_address(rfnm_eth_transport_ip_addr), RFNM_UDP_DATA_PORT);
-        rfnm_data_socket_udp.open(asio::ip::udp::v4());
-
-        rfnm_data_socket_udp.set_option(asio::socket_base::receive_buffer_size(1024 * 1024 * 4));
-        rfnm_data_socket_udp.set_option(asio::socket_base::send_buffer_size(1024 * 1024 * 4));
-
-        //if (tpm.rx_active) {
-        uint8_t empty_packet[1];
-        empty_packet[0] = 0xfe;
-        // give the remote host our current ephimeral port
-        rfnm_data_socket_udp.send_to(asio::buffer(empty_packet, 1), rfnm_data_ep_udp_tx);
-        //}
-
-        //rfnm_data_socket_udp->bind(rfnm_data_ep_udp_rx);
-
-
-
-#ifdef _WIN32
-        DWORD timeout = 50;
-        if (setsockopt(rfnm_data_socket_udp.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-            reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0)
-        {
-            spdlog::error("Failed to set receive timeout on Windows");
+    if (s->transport_status.transport == TRANSPORT_TCP) {
+        // CHANGED: Only use first 2 threads for TCP, shared connection
+        if (thread_index >= 2) {
+            delete lrxbuf;
+            delete ltxbuf;
+            return;
         }
-#else
-        struct timeval tv;
-        tv.tv_sec = 0;
-        tv.tv_usec = 50000; // 10,000 microseconds = 10 ms.
-        if (setsockopt(rfnm_data_socket_udp.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-            &tv, sizeof(tv)) < 0)
-        {
-            spdlog::error("Failed to set receive timeout on Linux/macOS");
+
+        if (thread_index == 0) {
+            // CHANGED: Thread 0 creates shared connection
+            tcp_data_io_context = std::make_shared<asio::io_context>();
+            tcp_data_socket = std::make_shared<asio::ip::tcp::socket>(*tcp_data_io_context);
+
+            rfnm_data_ep_tcp = asio::ip::tcp::endpoint(asio::ip::make_address(rfnm_eth_transport_ip_addr), RFNM_TCP_DATA_PORT);
+
+            // Connect to TCP data port
+            try {
+                tcp_data_socket->connect(rfnm_data_ep_tcp);
+                tcp_data_socket->set_option(asio::ip::tcp::no_delay(true));
+
+                // Set socket buffer sizes
+                tcp_data_socket->set_option(asio::socket_base::receive_buffer_size(1024 * 1024 * 4));
+                tcp_data_socket->set_option(asio::socket_base::send_buffer_size(1024 * 1024 * 4));
+
+                tcp_data_connected = true;
+                spdlog::info("Thread {} connected to TCP data port", thread_index);
+            }
+            catch (std::exception& e) {
+                spdlog::error("Thread {} failed to connect to TCP data: {}", thread_index, e.what());
+                delete lrxbuf;
+                delete ltxbuf;
+                return;
+            }
         }
-#endif
+        else {
+            // CHANGED: Thread 1 waits for connection
+            while (!tcp_data_connected && !tpm.shutdown_req) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+            if (!tcp_data_connected) {
+                delete lrxbuf;
+                delete ltxbuf;
+                return;
+            }
+        }
     }
 
     while (!tpm.shutdown_req) {
@@ -601,7 +543,7 @@ void device::threadfn(size_t thread_index) {
             }
         }
 
-        if (s->transport_status.transport == TRANSPORT_ETH && (tpm.ep_id % 2) == 0) {
+        if (s->transport_status.transport == TRANSPORT_TCP && (tpm.ep_id % 2) == 0) {
             //   goto skip_rx;
                 //receiver is blocking, so skip it in half the threads... 
         }
@@ -609,6 +551,11 @@ void device::threadfn(size_t thread_index) {
 
 
         if (tpm.rx_active) {
+            // CHANGED: For TCP, only thread 1 handles RX
+            if (s->transport_status.transport == TRANSPORT_TCP && thread_index != 1) {
+                goto skip_rx;
+            }
+
             struct rx_buf* buf;
 
 #if 0
@@ -644,6 +591,10 @@ void device::threadfn(size_t thread_index) {
 
 #endif
             if (s->transport_status.transport == TRANSPORT_USB) {
+                if (!usb_handle->primary) {
+                    spdlog::info("Thread {} detected force shutdown during USB op", thread_index);
+                    break;
+                }
 
                 libusb_device_handle* lusb_handle = usb_handle->primary;
                 if (1 && s->transport_status.usb_boost_connected) {
@@ -656,8 +607,13 @@ void device::threadfn(size_t thread_index) {
                 }
 
                 r = libusb_bulk_transfer(lusb_handle, (((tpm.ep_id % 4) + 1) | LIBUSB_ENDPOINT_IN),
-                    (uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_SIZE, &transferred, 1000);
-                if (r) {
+                    (uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_SIZE, &transferred, 100);
+                if (r == LIBUSB_ERROR_NO_DEVICE || r == LIBUSB_ERROR_IO) {
+                    // Device was reset or closed, exit gracefully
+                    spdlog::info("Thread {} USB device lost, exiting", thread_index);
+                    break;
+                }
+                else if (r) {
                     spdlog::error("RX bulk tx fail {} {}", tpm.ep_id, r);
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
@@ -731,16 +687,12 @@ void device::threadfn(size_t thread_index) {
 #endif
             }
 
-            if (s->transport_status.transport == TRANSPORT_ETH) {
+            if (s->transport_status.transport == TRANSPORT_TCP) {
+                // CHANGED: Receive from TCP instead of UDP with mutex protection
                 try {
-                    if (rfnm_data_socket_udp.receive(asio::buffer((uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_SIZE)) != RFNM_USB_RX_PACKET_SIZE) {
-
-                        std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
-                        rx_s.in.push(buf);
-                        rx_s.cv.notify_one();
-
-                        goto skip_rx;
-                    }
+                    std::lock_guard<std::mutex> lock(tcp_data_rx_mutex);
+                    // asio::read will read exactly RFNM_USB_RX_PACKET_SIZE bytes or throw an exception
+                    asio::read(*tcp_data_socket, asio::buffer((uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_SIZE));
 
                     if (rx_s.usb_cc[lrxbuf->adc_id] != UINT64_MAX && lrxbuf->usb_cc < rx_s.usb_cc[lrxbuf->adc_id]) {
                         std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
@@ -760,18 +712,9 @@ void device::threadfn(size_t thread_index) {
                     rx_s.in.push(buf);
                     rx_s.cv.notify_one();
 
-                    //spdlog::error("UDP problem: {}", e.what());
+                    //spdlog::error("TCP RX problem: {}", e.what());
+                    goto skip_rx;
                 }
-
-
-
-
-
-
-
-
-
-
             }
 
 
@@ -816,6 +759,11 @@ void device::threadfn(size_t thread_index) {
     skip_rx:
 
         if (tpm.tx_active) {
+            // CHANGED: For TCP, only thread 0 handles TX
+            if (s->transport_status.transport == TRANSPORT_TCP && thread_index != 0) {
+                goto read_dev_status;
+            }
+
             struct tx_buf* buf;
 #if 0
             if (tx_s.in.empty()) {
@@ -865,6 +813,10 @@ void device::threadfn(size_t thread_index) {
             ltxbuf->magic = 0x758f4d4a;
 
             if (s->transport_status.transport == TRANSPORT_USB) {
+                if (!usb_handle->primary) {
+                    spdlog::info("Thread {} detected force shutdown during USB op", thread_index);
+                    break;
+                }
                 libusb_device_handle* lusb_handle = usb_handle->primary;
                 if (0 && s->transport_status.usb_boost_connected) {
                     std::lock_guard<std::mutex> lockGuard(s_transport_pp_mutex);
@@ -875,8 +827,13 @@ void device::threadfn(size_t thread_index) {
                 }
 
                 r = libusb_bulk_transfer(lusb_handle, (((tpm.ep_id % 4) + 1) | LIBUSB_ENDPOINT_OUT),
-                    (uint8_t*)ltxbuf, RFNM_USB_TX_PACKET_SIZE, &transferred, 1000);
-                if (r) {
+                    (uint8_t*)ltxbuf, RFNM_USB_TX_PACKET_SIZE, &transferred, 100);
+                if (r == LIBUSB_ERROR_NO_DEVICE || r == LIBUSB_ERROR_IO) {
+                    // Device was reset or closed, exit gracefully
+                    spdlog::info("Thread {} USB device lost, exiting", thread_index);
+                    break;
+                }
+                else if (r) {
                     spdlog::error("TX bulk tx fail {} {}", tpm.ep_id, r);
                     std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
                     tx_s.in.push(buf);
@@ -957,9 +914,14 @@ void device::threadfn(size_t thread_index) {
 #endif
             }
 
-            if (s->transport_status.transport == TRANSPORT_ETH) {
-                if (rfnm_data_socket_udp.send_to(asio::buffer((uint8_t*)ltxbuf, RFNM_USB_TX_PACKET_SIZE), rfnm_data_ep_udp_tx) != RFNM_USB_TX_PACKET_SIZE) {
-                    spdlog::error("TX UDP queue error");
+            if (s->transport_status.transport == TRANSPORT_TCP) {
+                // CHANGED: Send over TCP instead of UDP with mutex protection
+                try {
+                    std::lock_guard<std::mutex> lock(tcp_data_tx_mutex);
+                    asio::write(*tcp_data_socket, asio::buffer((uint8_t*)ltxbuf, RFNM_USB_TX_PACKET_SIZE));
+                }
+                catch (std::exception& e) {
+                    spdlog::error("TCP TX error: {}", e.what());
                     std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
                     tx_s.in.push(buf);
                     reorder_tx_queue_nolock(tx_s);
@@ -992,89 +954,11 @@ void device::threadfn(size_t thread_index) {
             if (1 && ms_int.count() > 5) {
 
 
-                if (s->transport_status.transport == TRANSPORT_ETH) {
-
-                    // 1) gather missing across all ADCs 0..3
-                    std::vector<std::pair<uint64_t, uint8_t>> missing_pairs;
-                    for (uint8_t adc = 0; adc <= 3; ++adc) {
-                        auto miss = get_retransmission_list(adc);
-                        for (uint64_t seq : miss) {
-                            missing_pairs.emplace_back(seq, adc);
-                        }
-                    }
-
-                    // 2) filter out any we NACK’d <5ms ago
-                    auto now = std::chrono::steady_clock::now();
-                    std::vector<std::pair<uint64_t, uint8_t>> to_request;
-                    {
-                        std::lock_guard<std::mutex> lock(last_retx_mutex);
-                        to_request.reserve(missing_pairs.size());
-                        for (auto [seq, adc] : missing_pairs) {
-                            // combine seq+adc into a single key
-                            uint64_t key = (seq << 8) | adc;
-                            auto it = last_retx_time.find(key);
-                            if (it == last_retx_time.end()
-                                || now - it->second >= RETRANS_BACKOFF)
-                            {
-                                last_retx_time[key] = now;
-                                to_request.emplace_back(seq, adc);
-                            }
-                        }
-                    }
-
-                    static int tokens = 0;
-
-                    tokens += 3;
-
-                    if (tokens > 10) {
-                        tokens = 10;
-                    }
-
-                    if (to_request.size() > tokens) {
-                        to_request.resize(tokens);
-                    }
-
-                    tokens -= to_request.size();
-
-
-                    // 3) cap total NACKs to 3
-                    //if (to_request.size() > 5)
-                    //    to_request.resize(5);
-
-                    // 4) build and send one combined request
-                    if (!to_request.empty()) {
-                        std::vector<retrans_req_entry> reqs;
-                        reqs.reserve(to_request.size());
-                        for (auto [seq, adc] : to_request) {
-                            reqs.push_back({ seq, adc });
-                        }
-
-                        auto rc = control_transfer(
-                            RFNM_SET_RX_REPEAT,                     // your retransmit opcode
-                            reqs.size() * sizeof(retrans_req_entry),
-                            reinterpret_cast<uint8_t*>(reqs.data()),
-                            /* timeout_ms */ 50
-                        );
-                    }
-
-
-
+                if (s->transport_status.transport == TRANSPORT_TCP) {
+                    // NOTE: Retransmission would need to be reimplemented for TCP
+                    // TCP already handles retransmission at the protocol level
+                    // This section can be removed or replaced with TCP-specific error handling
                 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
                 //if (s_dev_status_mutex.try_lock())
                 std::unique_lock<std::mutex> lock(s_dev_status_mutex, std::try_to_lock);
@@ -1089,7 +973,7 @@ void device::threadfn(size_t thread_index) {
                         spdlog::error("control_transfer for RFNM_GET_DEV_STATUS failed");
                         //return RFNM_API_USB_FAIL;
 
-                        if (1 && ms_int.count() > 25 && s->transport_status.transport != TRANSPORT_ETH) {
+                        if (1 && ms_int.count() > 25 && s->transport_status.transport != TRANSPORT_TCP) {
                             spdlog::error("stopping stream");
 
                             for (int8_t i = 0; i < THREAD_COUNT; i++) {
@@ -1131,16 +1015,16 @@ void device::threadfn(size_t thread_index) {
     }
     //spdlog::error("past second delete");
 
-    if (s->transport_status.transport == TRANSPORT_ETH) {
-        //if (rfnm_data_ioctx_udp)
-        rfnm_data_ioctx_udp.stop();
-
-        if (rfnm_data_socket_udp.is_open()) {
-            std::error_code ec;
-            rfnm_data_socket_udp.close(ec);
-            if (ec) {
-                spdlog::warn("Error closing UDP socket: {}", ec.message());
+    if (s->transport_status.transport == TRANSPORT_TCP) {
+        // CHANGED: Cleanup shared connection on thread 0
+        if (thread_index == 0 && tcp_data_socket) {
+            tcp_data_connected = false;
+            try {
+                tcp_data_socket->close();
             }
+            catch (...) {}
+            tcp_data_socket.reset();
+            tcp_data_io_context.reset();
         }
     }
 
@@ -1156,7 +1040,7 @@ void device::threadfn(size_t thread_index) {
 
 
 MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport, std::string address, int bind) {
-    //if (transport == TRANSPORT_ETH) {
+    //if (transport == TRANSPORT_TCP) {
     //    spdlog::error("Transport not supported");
     //    return {};
     //}
@@ -1313,7 +1197,7 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
     }
 
 exit_local:
-    if (transport == TRANSPORT_ETH || transport == TRANSPORT_FIND) {
+    if (transport == TRANSPORT_TCP || transport == TRANSPORT_FIND) {
 
         try {
             asio::io_context io_context;
@@ -1338,7 +1222,7 @@ exit_local:
             socket.open(asio::ip::udp::v4());
 
 #ifdef _WIN32
-            DWORD timeout = 50; // 10 ms for Windows.
+            DWORD timeout = 150; // 10 ms for Windows.
             if (setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
                 reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0)
             {
@@ -1349,7 +1233,7 @@ exit_local:
             // As a work-around we set the socket to non-blocking mode
             // and use a sleep to allow the socket to receive the reply.
             socket.non_blocking(true);
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
 #endif
 
             if (!address.length()) {
@@ -1421,10 +1305,13 @@ exit_eth:
     return found;
 }
 
-MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, size_t* bufsize) {
+MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, size_t* bufsize, uint8_t* bytes_per_ele) {
     if (stream_format_locked) {
         if (bufsize) {
             *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * s->transport_status.rx_stream_format;
+        }
+        if (bytes_per_ele) {
+            *bytes_per_ele = s->transport_status.rx_stream_format;
         }
 
         if (format == s->transport_status.rx_stream_format) {
@@ -1444,10 +1331,16 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
         if (bufsize) {
             *bufsize = RFNM_USB_RX_PACKET_ELEM_CNT * format;
         }
+        if (bytes_per_ele) {
+            *bytes_per_ele = format;
+        }
         break;
     default:
         if (bufsize) {
             *bufsize = 0;
+        }
+        if (bytes_per_ele) {
+            *bytes_per_ele = 0;
         }
         return RFNM_API_NOT_SUPPORTED;
     }
@@ -1489,9 +1382,15 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
 
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
-        thread_data[i].rx_active = s->transport_status.transport == TRANSPORT_LOCAL ? ((i % 2) == 1) : 1;
-        //thread_data[i].rx_active = 1;
-        //thread_data[i].cv.notify_one();
+        if (s->transport_status.transport == TRANSPORT_TCP) {
+            thread_data[i].rx_active = (i == 1) ? 1 : 0;  // Only thread 1 does RX
+        }
+        else if (s->transport_status.transport == TRANSPORT_LOCAL) {
+            thread_data[i].rx_active = ((i % 2) == 1) ? 1 : 0;
+        }
+        else {
+            thread_data[i].rx_active = 1;
+        }
         thread_data[i].cv.notify_all();
     }
 
@@ -1518,9 +1417,15 @@ MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
 
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
-        thread_data[i].tx_active = s->transport_status.transport == TRANSPORT_LOCAL ? ((i % 2) == 0) : 1;
-        //thread_data[i].tx_active = 1;
-        //thread_data[i].cv.notify_one();
+        if (s->transport_status.transport == TRANSPORT_TCP) {
+            thread_data[i].tx_active = (i == 0) ? 1 : 0;  // Only thread 0 does TX
+        }
+        else if (s->transport_status.transport == TRANSPORT_LOCAL) {
+            thread_data[i].tx_active = ((i % 2) == 0) ? 1 : 0;
+        }
+        else {
+            thread_data[i].tx_active = 1;
+        }
         thread_data[i].cv.notify_all();
     }
 
@@ -1582,45 +1487,6 @@ MSDLL int device::single_ch_id_bitmap_to_adc_id(uint8_t ch_ids) {
     return -1;
 }
 
-MSDLL std::vector<uint64_t> device::get_retransmission_list(uint8_t adc_id) {
-    std::vector<uint64_t> missing;
-    std::lock_guard<std::mutex> lock(rx_s.out_mutex);
-
-    // nothing to do if uninitialized or empty
-    if (rx_s.usb_cc[adc_id] == UINT64_MAX || rx_s.out[adc_id].empty())
-        return missing;
-
-    // only trigger after some buffer has built up
-    if (rx_s.out[adc_id].size() < (RX_RECOMB_BUF_LEN / 2))
-        return missing;
-
-    // make a local copy so we can pop freely
-    auto pq = rx_s.out[adc_id];
-
-    uint64_t next_exp = rx_s.usb_cc[adc_id];
-
-
-    // walk through every packet in ascending CC order
-    while (!pq.empty()) {
-        uint64_t got = pq.top()->usb_cc;
-        pq.pop();
-
-        // if there’s a gap before this packet, fill it in
-        if (got > next_exp) {
-            for (uint64_t seq = next_exp; seq < got; ++seq) {
-                missing.insert(missing.begin(), seq);
-
-            }
-            return missing;
-
-        }
-
-        // now expect one past the packet we just saw
-        next_exp = got + 1;
-    }
-
-    return missing;
-}
 MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
     if (acquire_lock) {
         rx_s.out_mutex.lock();
@@ -1696,7 +1562,7 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
 
     int max_allowed_in_flight = RX_MAX_INFLIGHT_BUF_CNT;
-    if (s->transport_status.transport == TRANSPORT_ETH) {
+    if (s->transport_status.transport == TRANSPORT_TCP) {
         max_allowed_in_flight = RX_MAX_INFLIGHT_BUF_CNT_ETH;
     }
 
@@ -1728,7 +1594,7 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             rx_s.cv.notify_one();
 
             // do not log stale for eth transport as it could be retransmitted packets
-            if (s->transport_status.transport != TRANSPORT_ETH) {
+            if (s->transport_status.transport != TRANSPORT_TCP) {
                 discarded.push_back(buf->usb_cc);
             }
 
@@ -1947,62 +1813,6 @@ MSDLL rfnm_api_failcode device::tx_dqbuf(struct tx_buf** buf) {
     }
 }
 
-void dump_udp_socket_state(const asio::ip::udp::socket& socket)
-{
-    try {
-        // Check if the socket is open.
-        bool isOpen = socket.is_open();
-        spdlog::debug("UDP Socket is open: {}", isOpen);
-
-        if (isOpen) {
-            // Dump local endpoint information.
-            try {
-                asio::ip::udp::endpoint localEndpoint = socket.local_endpoint();
-                spdlog::info("Local endpoint: {}:{}",
-                    localEndpoint.address().to_string(),
-                    localEndpoint.port());
-            }
-            catch (const std::exception& ex) {
-                spdlog::error("Error retrieving local endpoint: {}", ex.what());
-            }
-
-            // Dump remote endpoint information (if available).
-            try {
-                asio::ip::udp::endpoint remoteEndpoint = socket.remote_endpoint();
-                spdlog::info("Remote endpoint: {}:{}",
-                    remoteEndpoint.address().to_string(),
-                    remoteEndpoint.port());
-            }
-            catch (const std::exception& ex) {
-                // It's common for UDP sockets not to have a remote endpoint until they are connected.
-                spdlog::debug("Remote endpoint not set or error retrieving it: {}", ex.what());
-            }
-
-            // Optionally, dump additional socket options.
-            try {
-                asio::socket_base::receive_buffer_size rcvBufOpt;
-                socket.get_option(rcvBufOpt);
-                spdlog::info("Receive buffer size: {}", rcvBufOpt.value());
-            }
-            catch (const std::exception& ex) {
-                spdlog::info("Could not get receive buffer size: {}", ex.what());
-            }
-
-            try {
-                asio::socket_base::send_buffer_size sndBufOpt;
-                socket.get_option(sndBufOpt);
-                spdlog::info("Send buffer size: {}", sndBufOpt.value());
-            }
-            catch (const std::exception& ex) {
-                spdlog::info("Could not get send buffer size: {}", ex.what());
-            }
-        }
-    }
-    catch (const std::exception& ex) {
-        spdlog::error("Exception while dumping UDP socket state: {}", ex.what());
-    }
-}
-
 MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint32_t size, uint8_t* buf, uint32_t timeout_ms) {
     uint32_t r = -1;
     if (s->transport_status.transport == TRANSPORT_USB) {
@@ -2063,20 +1873,36 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
         return RFNM_API_USB_FAIL;
 #endif
     }
-    if (s->transport_status.transport == TRANSPORT_ETH) {
+    if (s->transport_status.transport == TRANSPORT_TCP) {
+        // CHANGED: Use TCP instead of UDP for control transfers
+        
         try {
-
-            uint8_t message[1152];
-            message[0] = type & 0xff;
-
-            memcpy(&message[1], buf, size);
-            rfnm_ctrl_socket_udp->send_to(asio::buffer(message, size + 1), rfnm_ctrl_ep_udp);
-            char reply[1152];
-            asio::ip::udp::endpoint sender_endpoint;
-            //asio::ip::udp::endpoint sender_endpoint(asio::ip::udp::v4()); 
-            size_t reply_length;
+            struct rfnm_tcp_ctrl_header header;
+            header.cmd = type & 0xff;
+            std::vector<uint8_t> message;
 
             switch (type) {
+            case RFNM_SET_TX_CH_LIST:
+            case RFNM_SET_RX_CH_LIST:
+            case RFNM_SET_DCS:
+                /* SET commands: send header + data */
+                header.size = size;
+
+                // Log the control message being sent
+                //spdlog::info("Sending TCP control SET command: cmd=0x{:02x}, size={}", header.cmd, header.size);
+
+                // Send as a single message to ensure atomicity
+                
+                message.resize(sizeof(header) + size);
+                memcpy(message.data(), &header, sizeof(header));
+                memcpy(message.data() + sizeof(header), buf, size);
+
+                asio::write(*rfnm_ctrl_socket_tcp,
+                    asio::buffer(message.data(), message.size()));
+
+                /* SET commands don't get responses in this protocol */
+                return RFNM_API_OK;
+
             case RFNM_GET_DEV_HWINFO:
             case RFNM_GET_TX_CH_LIST:
             case RFNM_GET_RX_CH_LIST:
@@ -2084,50 +1910,48 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
             case RFNM_GET_DEV_STATUS:
             case RFNM_GET_SM_RESET:
             case RFNM_GET_LOCAL_MEMINFO:
+                /* GET commands: send header only, receive header + data */
+                header.size = 0;
 
-                /*if (type == RFNM_GET_DEV_STATUS) {
-                    static int get_some = 0;
-                    if (get_some++ > 20) {
-                        break;
-                    }
-                }*/
+                asio::write(*rfnm_ctrl_socket_tcp,
+                    asio::buffer(&header, sizeof(header)));
 
-                //dump_udp_socket_state(*rfnm_ctrl_socket_udp);
-                //spdlog::info("before");
+                /* Read response header */
+                struct rfnm_tcp_ctrl_header resp_header;
+                asio::read(*rfnm_ctrl_socket_tcp,
+                    asio::buffer(&resp_header, sizeof(resp_header)));
 
-                reply_length = rfnm_ctrl_socket_udp->receive_from(asio::buffer(reply, 1152), sender_endpoint);
-
-                // spdlog::info("after {}", reply_length);
-
-                if (reply[0] != (type & 0xff)) {
-                    spdlog::error("UDP control transfer conflict got {} should have been {}", (uint8_t)reply[0], (uint8_t)type);
+                if (resp_header.cmd != (type & 0xff)) {
+                    spdlog::error("TCP control response mismatch: got {}, expected {}",
+                        resp_header.cmd, type & 0xff);
                     return RFNM_API_USB_FAIL;
                 }
 
-                if (reply_length == size + 1) {
-                    memcpy(buf, &reply[1], size);
-                    break;
-                }
-                else {
-                    spdlog::error("Control message reply too short ({} bytes)", reply_length);
+                if (resp_header.size != size) {
+                    spdlog::error("TCP control size mismatch: got {}, expected {}",
+                        resp_header.size, size);
                     return RFNM_API_USB_FAIL;
                 }
-            case RFNM_SET_TX_CH_LIST:
-            case RFNM_SET_RX_CH_LIST:
-            case RFNM_SET_DCS:
-            case RFNM_SET_RX_REPEAT:
-                break;
+
+                /* Read response data */
+                asio::read(*rfnm_ctrl_socket_tcp, asio::buffer(buf, size));
+                if (header.cmd != 0x06) {
+                    //spdlog::info("TCP control GET response received: cmd=0x{:02x}, size={}", resp_header.cmd, resp_header.size);
+                }
+                
+
+                return RFNM_API_OK;
+
+            default:
+                spdlog::error("Unknown control transfer type: {}", (int)type);
+                return RFNM_API_NOT_SUPPORTED;
             }
-            return RFNM_API_OK;
         }
         catch (std::exception& e) {
-            //spdlog::error("UDP problem: {}", e.what());
-
-            //if (type == RFNM_GET_DEV_STATUS) {
-            //    return RFNM_API_OK;
-            //}
+            spdlog::error("TCP control transfer error: {}", e.what());
             return RFNM_API_USB_FAIL;
         }
+
     }
 
     return RFNM_API_USB_FAIL;
@@ -2180,7 +2004,22 @@ MSDLL rfnm_api_failcode device::get(enum req_type type) {
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode device::set(uint16_t applies, bool confirm_execution, uint32_t timeout_us) {
+MSDLL void device::reset_device_state() {
+    cc_tx = 0;
+    cc_rx = 0;
+    stream_format_locked = false;
+    tx_s.usb_cc = 0;
+    tx_s.qbuf_cnt = 0;
+
+    // Reset RX expected CC
+    for (int adc_id = 0; adc_id < 4; adc_id++) {
+        rx_s.usb_cc[adc_id] = UINT64_MAX;
+        rx_s.usb_cc_dropped[adc_id] = 0;
+        rx_s.usb_cc_ok[adc_id] = 0;
+    }
+}
+
+MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, uint32_t timeout_us) {
     int r;
     uint8_t applies_ch_tx = applies & 0xff;
     uint8_t applies_ch_rx = (applies & 0xff00) >> 8;
@@ -2293,14 +2132,14 @@ MSDLL const struct rfnm_api_tx_ch* device::get_tx_channel(uint32_t channel) {
     }
 }
 
-MSDLL rfnm_api_failcode device::set_rx_channel_active(uint32_t channel, enum rfnm_ch_enable enable,
+MSDLL rfnm_api_failcode device::set_rx_channel_status(uint32_t channel, enum rfnm_ch_enable enable,
     enum rfnm_ch_stream stream, bool apply) {
     if (channel < MAX_RX_CHANNELS) {
         s->rx.ch[channel].enable = enable;
         s->rx.ch[channel].stream = stream;
 
         if (apply) {
-            return set(rx_channel_apply_flags[channel]);
+            return device::apply(rx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2332,7 +2171,7 @@ MSDLL rfnm_api_failcode device::set_rx_channel_freq(uint32_t channel, int64_t fr
         s->rx.ch[channel].freq = freq;
 
         if (apply) {
-            return set(rx_channel_apply_flags[channel]);
+            return device::apply(rx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2348,7 +2187,7 @@ MSDLL rfnm_api_failcode device::set_rx_channel_rfic_lpf_bw(uint32_t channel, int
         s->rx.ch[channel].rfic_lpf_bw = bw;
 
         if (apply) {
-            return set(rx_channel_apply_flags[channel]);
+            return device::apply(rx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2364,7 +2203,7 @@ MSDLL rfnm_api_failcode device::set_rx_channel_gain(uint32_t channel, int8_t gai
         s->rx.ch[channel].gain = gain;
 
         if (apply) {
-            return set(rx_channel_apply_flags[channel]);
+            return device::apply(rx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2380,7 +2219,7 @@ MSDLL rfnm_api_failcode device::set_rx_channel_agc(uint32_t channel, enum rfnm_a
         s->rx.ch[channel].agc = agc;
 
         if (apply) {
-            return set(rx_channel_apply_flags[channel]);
+            return device::apply(rx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2396,7 +2235,7 @@ MSDLL rfnm_api_failcode device::set_rx_channel_fm_notch(uint32_t channel, enum r
         s->rx.ch[channel].fm_notch = fm_notch;
 
         if (apply) {
-            return set(rx_channel_apply_flags[channel]);
+            return device::apply(rx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2412,7 +2251,7 @@ MSDLL rfnm_api_failcode device::set_rx_channel_bias_tee(uint32_t channel, enum r
         s->rx.ch[channel].bias_tee = bias_tee;
 
         if (apply) {
-            return set(rx_channel_apply_flags[channel]);
+            return device::apply(rx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2428,7 +2267,7 @@ MSDLL rfnm_api_failcode device::set_rx_channel_path(uint32_t channel, enum rfnm_
         s->rx.ch[channel].path = path;
 
         if (apply) {
-            return set(rx_channel_apply_flags[channel]);
+            return device::apply(rx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2439,14 +2278,14 @@ MSDLL rfnm_api_failcode device::set_rx_channel_path(uint32_t channel, enum rfnm_
     }
 }
 
-MSDLL rfnm_api_failcode device::set_tx_channel_active(uint32_t channel, enum rfnm_ch_enable enable,
+MSDLL rfnm_api_failcode device::set_tx_channel_status(uint32_t channel, enum rfnm_ch_enable enable,
     enum rfnm_ch_stream stream, bool apply) {
     if (channel < MAX_TX_CHANNELS) {
         s->tx.ch[channel].enable = enable;
         s->tx.ch[channel].stream = stream;
 
         if (apply) {
-            return set(tx_channel_apply_flags[channel]);
+            return device::apply(tx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2477,7 +2316,7 @@ MSDLL rfnm_api_failcode device::set_tx_channel_freq(uint32_t channel, int64_t fr
         s->tx.ch[channel].freq = freq;
 
         if (apply) {
-            return set(tx_channel_apply_flags[channel]);
+            return device::apply(tx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2493,7 +2332,7 @@ MSDLL rfnm_api_failcode device::set_tx_channel_rfic_lpf_bw(uint32_t channel, int
         s->tx.ch[channel].rfic_lpf_bw = bw;
 
         if (apply) {
-            return set(tx_channel_apply_flags[channel]);
+            return device::apply(tx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2509,7 +2348,7 @@ MSDLL rfnm_api_failcode device::set_tx_channel_power(uint32_t channel, int8_t po
         s->tx.ch[channel].power = power;
 
         if (apply) {
-            return set(tx_channel_apply_flags[channel]);
+            return device::apply(tx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2525,7 +2364,7 @@ MSDLL rfnm_api_failcode device::set_tx_channel_bias_tee(uint32_t channel, enum r
         s->tx.ch[channel].bias_tee = bias_tee;
 
         if (apply) {
-            return set(tx_channel_apply_flags[channel]);
+            return device::apply(tx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2541,7 +2380,7 @@ MSDLL rfnm_api_failcode device::set_tx_channel_path(uint32_t channel, enum rfnm_
         s->tx.ch[channel].path = path;
 
         if (apply) {
-            return set(tx_channel_apply_flags[channel]);
+            return device::apply(tx_channel_apply_flags[channel]);
         }
         else {
             return RFNM_API_OK;
@@ -2744,4 +2583,35 @@ static std::string rfnm::get_broadcast_address() {
     freeifaddrs(ifaddr);
     return broadcast_ip;
 #endif
+}
+
+MSDLL const char* device::failcode_to_string(rfnm_api_failcode code) {
+    switch (code) {
+    case RFNM_API_OK:
+        return "Success";
+    case RFNM_API_PROBE_FAIL:
+        return "Probe failed";
+    case RFNM_API_TUNE_FAIL:
+        return "Tune failed";
+    case RFNM_API_GAIN_FAIL:
+        return "Gain setting failed";
+    case RFNM_API_TIMEOUT:
+        return "Operation timed out";
+    case RFNM_API_USB_FAIL:
+        return "USB communication failed";
+    case RFNM_API_DQBUF_OVERFLOW:
+        return "Dequeue buffer overflow";
+    case RFNM_API_NOT_SUPPORTED:
+        return "Operation not supported";
+    case RFNM_API_SW_UPGRADE_REQUIRED:
+        return "Software upgrade required - protocol version mismatch";
+    case RFNM_API_DQBUF_NO_DATA:
+        return "No data available in dequeue buffer";
+    case RFNM_API_MIN_QBUF_CNT_NOT_SATIFIED:
+        return "Minimum queue buffer count not satisfied";
+    case RFNM_API_MIN_QBUF_QUEUE_FULL:
+        return "Minimum queue buffer is full";
+    default:
+        return "Unknown error code";
+    }
 }

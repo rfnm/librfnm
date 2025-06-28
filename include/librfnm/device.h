@@ -115,6 +115,15 @@ namespace rfnm {
         std::mutex cv_mutex;
     };
 
+    struct ch_helper {
+        uint8_t id;
+        uint8_t mask; 
+        uint16_t apply;
+        uint8_t is_rx;
+        uint8_t is_tx;
+    };
+
+
     struct _usb_handle;
 
     class rx_stream;
@@ -128,7 +137,7 @@ namespace rfnm {
 
         MSDLL rfnm_api_failcode get(enum req_type type);
 
-        MSDLL rfnm_api_failcode set(uint16_t applies, bool confirm_execution = true, uint32_t timeout_us = 1000000);
+        MSDLL rfnm_api_failcode apply(uint16_t applies, bool confirm_execution = true, uint32_t timeout_us = 1000000);
 
         // Getters
         MSDLL const struct rfnm_dev_hwinfo * get_hwinfo();
@@ -141,29 +150,29 @@ namespace rfnm {
         MSDLL rfnm_api_failcode control_transfer(enum rfnm_control_ep type, uint32_t size, uint8_t * buf, uint32_t timeout_ms);
 
         // General setters
-        MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t* bufsize);
+        MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t* bufsize = 0, uint8_t *bytes_per_ele = 0);
         MSDLL rfnm_api_failcode set_dcs(uint64_t freq, uint32_t timeout_us = 20000);
 
         // RX channel setters
-        //MSDLL rfnm_api_failcode set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
-        MSDLL rfnm_api_failcode set_rx_channel_freq(uint32_t channel, int64_t freq, bool apply = true);
-        MSDLL rfnm_api_failcode set_rx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = true);
-        MSDLL rfnm_api_failcode set_rx_channel_gain(uint32_t channel, int8_t gain, bool apply = true);
+        //MSDLL rfnm_api_failcode set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = false);
+        MSDLL rfnm_api_failcode set_rx_channel_freq(uint32_t channel, int64_t freq, bool apply = false);
+        MSDLL rfnm_api_failcode set_rx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = false);
+        MSDLL rfnm_api_failcode set_rx_channel_gain(uint32_t channel, int8_t gain, bool apply = false);
         // not exposing setter for rfic_dc_i and rfic_dc_q because that functionality will need to change
         // use the stream class for ADC interleaving aware DC offset removal instead
-        MSDLL rfnm_api_failcode set_rx_channel_agc(uint32_t channel, enum rfnm_agc_type agc, bool apply = true);
-        MSDLL rfnm_api_failcode set_rx_channel_fm_notch(uint32_t channel, enum rfnm_fm_notch fm_notch, bool apply = true);
-        MSDLL rfnm_api_failcode set_rx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply = true);
-        MSDLL rfnm_api_failcode set_rx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply = true);
+        MSDLL rfnm_api_failcode set_rx_channel_agc(uint32_t channel, enum rfnm_agc_type agc, bool apply = false);
+        MSDLL rfnm_api_failcode set_rx_channel_fm_notch(uint32_t channel, enum rfnm_fm_notch fm_notch, bool apply = false);
+        MSDLL rfnm_api_failcode set_rx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply = false);
+        MSDLL rfnm_api_failcode set_rx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply = false);
         // not exposing setter for data_type because this library only handles complex samples for now
 
         // TX channel setters
-        //MSDLL rfnm_api_failcode set_tx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = true);
-        MSDLL rfnm_api_failcode set_tx_channel_freq(uint32_t channel, int64_t freq, bool apply = true);
-        MSDLL rfnm_api_failcode set_tx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = true);
-        MSDLL rfnm_api_failcode set_tx_channel_power(uint32_t channel, int8_t power, bool apply = true);
-        MSDLL rfnm_api_failcode set_tx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply = true);
-        MSDLL rfnm_api_failcode set_tx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply = true);
+        //MSDLL rfnm_api_failcode set_tx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = false);
+        MSDLL rfnm_api_failcode set_tx_channel_freq(uint32_t channel, int64_t freq, bool apply = false);
+        MSDLL rfnm_api_failcode set_tx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = false);
+        MSDLL rfnm_api_failcode set_tx_channel_power(uint32_t channel, int8_t power, bool apply = false);
+        MSDLL rfnm_api_failcode set_tx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply = false);
+        MSDLL rfnm_api_failcode set_tx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply = false);
         // not exposing setter for data_type because this library only handles complex samples for now
 
         // High level stream API
@@ -175,20 +184,43 @@ namespace rfnm {
         MSDLL rfnm_api_failcode rx_qbuf(struct rx_buf* buf, bool new_buffer = false);
         MSDLL rfnm_api_failcode rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids = 0, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode rx_flush(uint32_t timeout_us = 20000, uint8_t ch_ids = 0xFF);
-        MSDLL rfnm_api_failcode set_rx_channel_active(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = true);
+        MSDLL rfnm_api_failcode set_rx_channel_status(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = false);
 
         // Low level TX stream API
         MSDLL rfnm_api_failcode tx_work_start(enum tx_latency_policy policy = TX_LATENCY_POLICY_DEFAULT);
         MSDLL rfnm_api_failcode tx_work_stop();
         MSDLL rfnm_api_failcode tx_qbuf(struct tx_buf* buf, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode tx_dqbuf(struct tx_buf** buf);
-        MSDLL rfnm_api_failcode set_tx_channel_active(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = true);
+        MSDLL rfnm_api_failcode set_tx_channel_status(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = false);
 
         // RF path (antenna) name conversion
         MSDLL static enum rfnm_rf_path string_to_rf_path(std::string path);
         MSDLL static std::string rf_path_to_string(enum rfnm_rf_path path);
 
+        MSDLL static const char* failcode_to_string(rfnm_api_failcode code);
+
         size_t THREAD_COUNT = 16;
+
+
+        inline ch_helper rx_ch_helper(uint8_t rx_ch_id) {
+            ch_helper helper;
+            helper.id = rx_ch_id;
+            helper.mask = channel_flags[rx_ch_id];
+            helper.apply = rx_channel_apply_flags[rx_ch_id];
+            helper.is_rx = 1;
+            helper.is_tx = 0;
+            return helper;
+        }
+
+        inline ch_helper tx_ch_helper(uint8_t tx_ch_id) {
+            ch_helper helper;
+            helper.id = tx_ch_id;
+            helper.mask = channel_flags[tx_ch_id];
+            helper.apply = tx_channel_apply_flags[tx_ch_id];
+            helper.is_rx = 0;
+            helper.is_tx = 1;
+            return helper;
+        }
 
     private:
         void threadfn(size_t thread_index);
@@ -205,6 +237,8 @@ namespace rfnm {
 
         MSDLL std::vector<uint64_t> get_retransmission_list(uint8_t adc_id);
 
+        MSDLL void device::reset_device_state();
+
         
 
         _usb_handle *usb_handle = nullptr;
@@ -220,6 +254,20 @@ namespace rfnm {
         asio::ip::udp::endpoint rfnm_data_ep_udp_rx;
         std::unique_ptr<asio::io_context> rfnm_data_ioctx_tcp;
         std::unique_ptr<asio::ip::udp::socket> rfnm_data_socket_udp;*/
+
+        std::unique_ptr<asio::ip::tcp::socket> rfnm_ctrl_socket_tcp;
+
+        inline static std::shared_ptr<asio::io_context> tcp_data_io_context;
+        inline static std::shared_ptr<asio::ip::tcp::socket> tcp_data_socket;
+        inline static std::mutex tcp_data_tx_mutex;
+        inline static std::mutex tcp_data_rx_mutex;
+        inline static std::atomic<bool> tcp_data_connected{ false };
+
+        std::atomic<bool> usb_shutdown{ false };
+
+
+        
+
 
         
 

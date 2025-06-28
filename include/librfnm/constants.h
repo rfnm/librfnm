@@ -82,7 +82,8 @@ namespace rfnm {
     enum transport {
         TRANSPORT_LOCAL,
         TRANSPORT_USB,
-        TRANSPORT_ETH,
+        TRANSPORT_TCP,
+        TRANSPORT_UDP,
         TRANSPORT_FIND
     };
 

@@ -5,17 +5,38 @@
 
 #define NBUF 300
 
-int main() {
+std::atomic<bool> shutdown_req(false);
 
+void signal_handler(int signum) {
+    shutdown_req = true;
+}
+
+int main() {
+    signal(SIGINT, signal_handler);
+    signal(SIGTERM, signal_handler);
+#ifdef _WIN32
+    signal(SIGBREAK, signal_handler);
+#endif
+
+    rfnm_api_failcode lret;
     auto lrfnm = new rfnm::device(rfnm::TRANSPORT_FIND);
     lrfnm->set_dcs(122880000 / 4); // for now tx frequency is half this, so max is 61 msps
 
-    lrfnm->set_tx_channel_active(0, RFNM_CH_ON, RFNM_CH_STREAM_ON, false);
-    lrfnm->set(rfnm::APPLY_CH0_TX);
+    rfnm::ch_helper tx_ch = lrfnm->tx_ch_helper(0);
 
-    auto stream_format = rfnm::STREAM_FORMAT_CS16;
+    lrfnm->set_tx_channel_status(tx_ch.id, RFNM_CH_ON, RFNM_CH_STREAM_ON);
 
-    int inbufsize = RFNM_USB_TX_PACKET_ELEM_CNT * lrfnm->get_transport_status()->tx_stream_format;
+    lrfnm->set_tx_channel_freq(tx_ch.id, RFNM_MHZ_TO_HZ(3050));
+
+    if (lret = lrfnm->apply(tx_ch.apply)) {
+        printf("Error applying TX channel configuration: %s (code: %d)\n", rfnm::device::failcode_to_string(lret), lret);
+        return -1;
+    }
+    size_t inbufsize;
+    uint8_t bytes_per_ele;
+
+    lrfnm->set_stream_format(rfnm::STREAM_FORMAT_CS16, &inbufsize, &bytes_per_ele);
+    printf("bufsize: %zd, %d bytes per element\n", inbufsize, bytes_per_ele);
     
     std::queue<struct rfnm::tx_buf*> ltxqueue;
 
@@ -79,7 +100,7 @@ int main() {
     int dequed = 0;
     static auto tstart = std::chrono::high_resolution_clock::now();
 
-    while (1) {
+    while (!shutdown_req) {
         struct rfnm::tx_buf* ltxbuf;
         rfnm_api_failcode err;
 
@@ -120,5 +141,7 @@ int main() {
         }
         
     }
+
+    delete lrfnm;
     return 0;
 }
