@@ -43,9 +43,9 @@ enum rfnm_rf_path {
 };
 
 enum rfnm_ch_enable {
-	RFNM_CH_OFF,
-	RFNM_CH_ON,
-	RFNM_CH_ON_TDD
+	RFNM_CH_RF_OFF,
+	RFNM_CH_RF_ON,
+	RFNM_CH_RF_ON_TDD
 };
 
 enum rfnm_ch_stream {
@@ -129,11 +129,12 @@ RFNM_PACKED_STRUCT(
 );
 
 RFNM_PACKED_STRUCT(
-	struct rfnm_dev_hwinfo_clockgen {
+	struct rfnm_dev_hwinfo_clock {
+	uint64_t samp_rate;
+	uint64_t samp_rate_min;
+	uint64_t samp_rate_max;
+	uint32_t samp_rate_step;
 	uint64_t dcs_clk;
-	uint64_t dcs_clk_min;
-	uint64_t dcs_clk_max;
-	uint32_t dcs_clk_step;
 }
 );
 
@@ -142,7 +143,7 @@ RFNM_PACKED_STRUCT(
 	uint32_t protocol_version;
 	struct rfnm_dev_hwinfo_bit motherboard;
 	struct rfnm_dev_hwinfo_bit daughterboard[2];
-	struct rfnm_dev_hwinfo_clockgen clock;
+	struct rfnm_dev_hwinfo_clock clock;
 }
 );
 
@@ -240,7 +241,7 @@ enum rfnm_control_ep {
 	RFNM_GET_DEV_STATUS,
 	RFNM_GET_SM_RESET,
 	RFNM_GET_LOCAL_MEMINFO,
-	RFNM_SET_DCS,
+	RFNM_SET_SAMP_RATE,
 	RFNM_SET_RX_REPEAT,
 };
 

@@ -1829,7 +1829,7 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
             break;
         case RFNM_SET_TX_CH_LIST:
         case RFNM_SET_RX_CH_LIST:
-        case RFNM_SET_DCS:
+        case RFNM_SET_SAMP_RATE:
             r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 type, 0, (unsigned char*)buf, size, timeout_ms);
             break;
@@ -1860,7 +1860,7 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
             break;
         case RFNM_SET_TX_CH_LIST:
         case RFNM_SET_RX_CH_LIST:
-        case RFNM_SET_DCS:
+        case RFNM_SET_SAMP_RATE:
             memcpy(&ep_ctrl_buf[0], buf, size);
             if (ioctl(rfnm_ctrl_ep_ioctl, RFNM_IOCTL_BASE + (0xff & type), &ep_ctrl_buf) < 0) {
                 goto exit_error_local;
@@ -1884,7 +1884,7 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
             switch (type) {
             case RFNM_SET_TX_CH_LIST:
             case RFNM_SET_RX_CH_LIST:
-            case RFNM_SET_DCS:
+            case RFNM_SET_SAMP_RATE:
                 /* SET commands: send header + data */
                 header.size = size;
 
@@ -2087,8 +2087,8 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
 }
 
 
-MSDLL rfnm_api_failcode device::set_dcs(uint64_t freq, uint32_t timeout_us) {
-    if (control_transfer(RFNM_SET_DCS, sizeof(uint64_t), (unsigned char*)&freq, 50) != RFNM_API_OK) {
+MSDLL rfnm_api_failcode device::set_samp_rate(uint64_t freq, uint32_t timeout_us) {
+    if (control_transfer(RFNM_SET_SAMP_RATE, sizeof(uint64_t), (unsigned char*)&freq, 50) != RFNM_API_OK) {
         return RFNM_API_USB_FAIL;
     }
 

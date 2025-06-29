@@ -24,10 +24,10 @@ int main() {
     rfnm::ch_helper rx_ch = lrfnm->rx_ch_helper(1);
     rfnm::ch_helper tx_ch = lrfnm->tx_ch_helper(0);
 
-    lrfnm->set_dcs(122880000 / 4);
+    lrfnm->set_samp_rate(122880000 / 4);
 
-    lrfnm->set_tx_channel_status(tx_ch.id, RFNM_CH_ON, RFNM_CH_STREAM_ON);
-    lrfnm->set_rx_channel_status(rx_ch.id, RFNM_CH_ON, RFNM_CH_STREAM_ON);
+    lrfnm->set_tx_channel_status(tx_ch.id, RFNM_CH_RF_ON, RFNM_CH_STREAM_ON);
+    lrfnm->set_rx_channel_status(rx_ch.id, RFNM_CH_RF_ON, RFNM_CH_STREAM_ON);
 
     lrfnm->set_tx_channel_freq(tx_ch.id, RFNM_MHZ_TO_HZ(3050));
     lrfnm->set_rx_channel_freq(rx_ch.id, RFNM_MHZ_TO_HZ(3050));

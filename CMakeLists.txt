@@ -22,6 +22,14 @@ endif()
 
 set(ENABLE_ADDRESS_SANITIZER OFF)
 
+if(NOT COMMAND CPMAddPackage)
+    include(cmake/cpm.cmake)
+endif()
+
+if(NOT TARGET asio)
+    include(cmake/cpm-asio.cmake)
+endif()
+
 # List all source files
 file(GLOB_RECURSE SRC "src/*.cpp")
 
@@ -68,11 +76,6 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(libusb REQUIRED IMPORTED_TARGET libusb-1.0)
 
-# Find ASIO
-set(ASIO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/asio/asio")
-include_directories("${ASIO_ROOT}/include")
-add_definitions(-DASIO_STANDALONE)
-
 # Called to configure the object, static and dynamic targets, avoids code duplication
 function(configure_rfnm_target target)
     # Set C++ standard to C++17
@@ -87,11 +90,15 @@ function(configure_rfnm_target target)
     # Include the include folder
     target_include_directories(${target} PUBLIC "include/")
 
+    include_directories(${asio_SOURCE_DIR}/asio/include)
+
     # Link to spdlog
     target_link_libraries(${target} PRIVATE spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32>)
 
     # Link to libusb
     target_link_libraries(${target} PRIVATE PkgConfig::libusb)
+
+    #target_link_libraries(${target} PRIVATE asio)
 endfunction()
 
 # Configure all targets
@@ -125,11 +132,9 @@ install(TARGETS rfnm_static rfnm)
 install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 # On Windows, install dependencies
-if (MSVC)
-    install(FILES $<TARGET_FILE_DIR:rfnm>/spdlog.dll DESTINATION ${CMAKE_INSTALL_BINDIR})
-    install(FILES $<TARGET_FILE_DIR:rfnm>/fmt.dll DESTINATION ${CMAKE_INSTALL_BINDIR})
-    install(FILES $<TARGET_FILE_DIR:rfnm>/libusb-1.0.dll DESTINATION ${CMAKE_INSTALL_BINDIR})
-endif ()
+if (MSVC AND NOT BUILD_SHARED_LIBS)
+    install(FILES $<TARGET_RUNTIME_DLLS:rfnm> DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 
 # Install UDEV rules
 if (LINUX AND INSTALL_UDEV_RULES)
