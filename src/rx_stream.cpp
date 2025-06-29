@@ -26,8 +26,8 @@ MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
     //    }
     }
 
-    phytimer_ticks_per_sample = 4 * n;
-    ns_per_sample = n * 1e9 / dev.get_hwinfo()->clock.dcs_clk;
+    phytimer_ticks_per_sample = 1;//4 * n;
+    ns_per_sample = n * 1e9 / dev.get_hwinfo()->clock.samp_rate;
 }
 
 MSDLL rx_stream::~rx_stream() {
@@ -79,12 +79,12 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     uint8_t chan_mask = 0;
     for (uint32_t channel : channels) {
         // can't have multiple streams running on a channel
-        if (dev.get_rx_channel(channel)->enable != RFNM_CH_OFF) {
+        if (dev.get_rx_channel(channel)->enable != RFNM_CH_RF_OFF) {
             ret = RFNM_API_NOT_SUPPORTED;
             goto error;
         }
 
-        dev.set_rx_channel_status(channel, RFNM_CH_ON, RFNM_CH_STREAM_AUTO, false);
+        dev.set_rx_channel_status(channel, RFNM_CH_RF_ON, RFNM_CH_STREAM_AUTO, false);
         apply_mask |= rx_channel_apply_flags[channel];
         chan_mask |= channel_flags[channel];
     }
@@ -131,7 +131,7 @@ MSDLL rfnm_api_failcode rx_stream::stop() {
     uint16_t apply_mask = 0;
     uint8_t chan_mask = 0;
     for (uint32_t channel : channels) {
-        dev.set_rx_channel_status(channel, RFNM_CH_OFF, RFNM_CH_STREAM_AUTO, false);
+        dev.set_rx_channel_status(channel, RFNM_CH_RF_OFF, RFNM_CH_STREAM_AUTO, false);
         apply_mask |= rx_channel_apply_flags[channel];
         chan_mask |= channel_flags[channel];
     }
@@ -224,7 +224,7 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
 
     return ret;
 }
-
+#if 0
 rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool first) {
     rfnm_api_failcode ret = RFNM_API_OK;
     auto timeout = std::chrono::system_clock::now() + std::chrono::microseconds(timeout_us);
@@ -334,6 +334,94 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool first) {
 
     return ret;
 }
+#else
+
+
+// Modified rx_dqbuf_multi function that doesn't rely on phytimer
+rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool first) {
+    rfnm_api_failcode ret = RFNM_API_OK;
+    auto timeout = std::chrono::system_clock::now() + std::chrono::microseconds(timeout_us);
+
+    // Remove phytimer-related variables since we're not using them
+    // const int32_t rounding_ticks = phytimer_ticks_per_sample / 2;
+    // uint32_t first_phytimer;
+    // bool first_phytimer_set = false;
+
+    for (uint32_t channel : channels) {
+        if (samples_left[channel] > 0) continue;
+
+        if (pending_rx_buf[channel]) {
+            dev.rx_qbuf(pending_rx_buf[channel]);
+            pending_rx_buf[channel] = nullptr;
+        }
+
+        uint32_t wait_us = 0;
+        auto time_remaining = timeout - std::chrono::system_clock::now();
+        if (time_remaining > std::chrono::duration<int64_t>::zero()) {
+            wait_us = std::chrono::duration_cast<std::chrono::microseconds>(time_remaining).count();
+        }
+
+        ret = dev.rx_dqbuf(&pending_rx_buf[channel], channel_flags[channel], wait_us);
+        if (ret) break;
+
+        // Always use the full buffer - no phytimer-based adjustments
+        samples_left[channel] = RFNM_USB_RX_PACKET_ELEM_CNT;
+
+        if (dc_correction[channel]) {
+            // periodically recalibrate DC offset to account for drift
+            if ((pending_rx_buf[channel]->usb_cc & 0xF) == 0 || first) {
+                float filter_factor = first ? 1.0f : 0.1f;
+
+                switch (dev.get_transport_status()->rx_stream_format) {
+                case STREAM_FORMAT_CS8:
+                    measQuadDcOffset(reinterpret_cast<int8_t*>(pending_rx_buf[channel]->buf),
+                        RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i8, filter_factor);
+                    break;
+                case STREAM_FORMAT_CS16:
+                    measQuadDcOffset(reinterpret_cast<int16_t*>(pending_rx_buf[channel]->buf),
+                        RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i16, filter_factor);
+                    break;
+                case STREAM_FORMAT_CF32:
+                    measQuadDcOffset(reinterpret_cast<float*>(pending_rx_buf[channel]->buf),
+                        RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].f32, filter_factor);
+                    break;
+                }
+            }
+
+            switch (dev.get_transport_status()->rx_stream_format) {
+            case STREAM_FORMAT_CS8:
+                applyQuadDcOffset(reinterpret_cast<int8_t*>(pending_rx_buf[channel]->buf),
+                    RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i8);
+                break;
+            case STREAM_FORMAT_CS16:
+                applyQuadDcOffset(reinterpret_cast<int16_t*>(pending_rx_buf[channel]->buf),
+                    RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i16);
+                break;
+            case STREAM_FORMAT_CF32:
+                applyQuadDcOffset(reinterpret_cast<float*>(pending_rx_buf[channel]->buf),
+                    RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].f32);
+                break;
+            }
+        }
+
+        // REMOVED: All phytimer-based synchronization logic
+        // This includes:
+        // - Channel alignment on first buffer (the 55 sample offset)
+        // - Sample drop/repeat detection based on phytimer deltas
+        // - No more tracking of last_phytimer values
+
+        // Without phytimer, we assume:
+        // 1. Buffers arrive in order with no drops
+        // 2. Channels are already synchronized at the hardware level
+        // 3. Each buffer contains exactly RFNM_USB_RX_PACKET_ELEM_CNT samples
+    }
+
+    return ret;
+}
+
+#endif
+
+
 
 void rx_stream::rx_qbuf_multi() {
     for (uint32_t channel : channels) {

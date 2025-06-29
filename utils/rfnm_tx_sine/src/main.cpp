@@ -20,11 +20,11 @@ int main() {
 
     rfnm_api_failcode lret;
     auto lrfnm = new rfnm::device(rfnm::TRANSPORT_FIND);
-    lrfnm->set_dcs(122880000 / 4); // for now tx frequency is half this, so max is 61 msps
+    lrfnm->set_samp_rate(122880000 / 4); // for now tx frequency is half this, so max is 61 msps
 
     rfnm::ch_helper tx_ch = lrfnm->tx_ch_helper(0);
 
-    lrfnm->set_tx_channel_status(tx_ch.id, RFNM_CH_ON, RFNM_CH_STREAM_ON);
+    lrfnm->set_tx_channel_status(tx_ch.id, RFNM_CH_RF_ON, RFNM_CH_STREAM_ON);
 
     lrfnm->set_tx_channel_freq(tx_ch.id, RFNM_MHZ_TO_HZ(3050));
 

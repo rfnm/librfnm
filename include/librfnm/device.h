@@ -151,7 +151,7 @@ namespace rfnm {
 
         // General setters
         MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t* bufsize = 0, uint8_t *bytes_per_ele = 0);
-        MSDLL rfnm_api_failcode set_dcs(uint64_t freq, uint32_t timeout_us = 20000);
+        MSDLL rfnm_api_failcode set_samp_rate(uint64_t freq, uint32_t timeout_us = 20000);
 
         // RX channel setters
         //MSDLL rfnm_api_failcode set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = false);
