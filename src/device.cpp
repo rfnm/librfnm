@@ -2080,6 +2080,8 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
             if (us_int.count() > timeout_us) {
                 return RFNM_API_TIMEOUT;
             }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 
