@@ -171,6 +171,15 @@ RFNM_PACKED_STRUCT(
 	uint32_t cc_rx;
 	int32_t tx_ecodes[8];
 	int32_t rx_ecodes[8];
+	uint32_t cc_samp_rate;
+	int32_t samp_rate_ecode;
+}
+);
+
+RFNM_PACKED_STRUCT(
+	struct rfnm_dev_set_samp_rate {
+	uint64_t freq;
+	uint32_t cc;
 }
 );
 

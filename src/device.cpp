@@ -2104,17 +2104,39 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
 
 
 MSDLL rfnm_api_failcode device::set_samp_rate(uint64_t freq, uint32_t timeout_us) {
-    if (control_transfer(RFNM_SET_SAMP_RATE, sizeof(uint64_t), (unsigned char*)&freq, 50) != RFNM_API_OK) {
+    struct rfnm_dev_set_samp_rate r_sr;
+    r_sr.freq = freq;
+    r_sr.cc = ++cc_samp_rate;
+
+    if (control_transfer(RFNM_SET_SAMP_RATE, sizeof(struct rfnm_dev_set_samp_rate), (unsigned char*)&r_sr, 50) != RFNM_API_OK) {
         return RFNM_API_USB_FAIL;
     }
 
-    // uhm think about this design
+    // Poll GET_SET_RESULT until the device reports this samp-rate command (cc match),
+    // then return its status. Same cc correlation as apply()'s cc_tx/cc_rx + ecodes.
+    auto tstart = std::chrono::high_resolution_clock::now();
+    while (1) {
+        struct rfnm_dev_get_set_result r_res;
 
-    if (get(REQ_HWINFO)) {
-        return RFNM_API_USB_FAIL;
+        if (control_transfer(RFNM_GET_SET_RESULT, sizeof(struct rfnm_dev_get_set_result), (unsigned char*)&r_res, 50) != RFNM_API_OK) {
+            return RFNM_API_USB_FAIL;
+        }
+
+        if (r_res.cc_samp_rate == cc_samp_rate) {
+            // refresh the client-visible hwinfo with the device's value
+            if (get(REQ_HWINFO)) {
+                return RFNM_API_USB_FAIL;
+            }
+            return (rfnm_api_failcode)r_res.samp_rate_ecode;
+        }
+
+        auto tnow = std::chrono::high_resolution_clock::now();
+        if (std::chrono::duration_cast<std::chrono::microseconds>(tnow - tstart).count() > timeout_us) {
+            return RFNM_API_TIMEOUT;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-
-    return RFNM_API_OK;
 }
 
 MSDLL const struct rfnm_dev_hwinfo* device::get_hwinfo() {

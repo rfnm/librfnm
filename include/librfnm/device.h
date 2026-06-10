@@ -290,6 +290,7 @@ namespace rfnm {
 
         uint32_t cc_tx = 0;
         uint32_t cc_rx = 0;
+        uint32_t cc_samp_rate = 0;
         int last_dqbuf_ch = 0;
 
         int rx_stream_count = 0;
