@@ -147,6 +147,8 @@ namespace rfnm {
         MSDLL const struct rfnm_api_tx_ch * get_tx_channel(uint32_t channel);
         MSDLL uint32_t get_rx_channel_count();
         MSDLL uint32_t get_tx_channel_count();
+        MSDLL bool is_rx_channel_available(uint32_t channel);
+        MSDLL bool is_tx_channel_available(uint32_t channel);
         MSDLL rfnm_api_failcode control_transfer(enum rfnm_control_ep type, uint32_t size, uint8_t * buf, uint32_t timeout_ms);
 
         // General setters

@@ -1349,6 +1349,14 @@ MSDLL rfnm_api_failcode device::set_stream_format(enum stream_format format, siz
 }
 
 MSDLL rx_stream* device::rx_stream_create(uint8_t ch_ids) {
+    // Honor device-reported channel availability: warn if a requested channel is marked
+    // unavailable. The device remains the authoritative gate and will reject it on apply.
+    for (uint32_t ch = 0; ch < MAX_RX_CHANNELS; ch++) {
+        if ((ch_ids & (1u << ch)) && !is_rx_channel_available(ch)) {
+            spdlog::warn("rx_stream_create: rx channel {} reports avail=0", ch);
+        }
+    }
+
     stream_format_locked = true;
     return new rx_stream(*this, ch_ids);
 }
@@ -2399,26 +2407,39 @@ MSDLL rfnm_api_failcode device::set_tx_channel_path(uint32_t channel, enum rfnm_
 }
 
 
+// Channel availability is authoritative from the device: rfnm_dgb_reg_{rx,tx}_ch() marks
+// every registered channel avail=1, so the channel list reflects exactly which channels
+// exist. Enumeration counts available channels directly.
 MSDLL uint32_t device::get_rx_channel_count() {
-    uint32_t count = s->hwinfo.daughterboard[0].rx_ch_cnt + s->hwinfo.daughterboard[1].rx_ch_cnt;
+    uint32_t count = 0;
 
-    // should never happen unless firmware malfunctions
-    if (count > MAX_RX_CHANNELS) {
-        count = MAX_RX_CHANNELS;
+    for (uint32_t i = 0; i < MAX_RX_CHANNELS; i++) {
+        if (s->rx.ch[i].avail) {
+            count++;
+        }
     }
 
     return count;
 }
 
 MSDLL uint32_t device::get_tx_channel_count() {
-    uint32_t count = s->hwinfo.daughterboard[0].tx_ch_cnt + s->hwinfo.daughterboard[1].tx_ch_cnt;
+    uint32_t count = 0;
 
-    // should never happen unless firmware malfunctions
-    if (count > MAX_TX_CHANNELS) {
-        count = MAX_TX_CHANNELS;
+    for (uint32_t i = 0; i < MAX_TX_CHANNELS; i++) {
+        if (s->tx.ch[i].avail) {
+            count++;
+        }
     }
 
     return count;
+}
+
+MSDLL bool device::is_rx_channel_available(uint32_t channel) {
+    return channel < MAX_RX_CHANNELS && s->rx.ch[channel].avail != 0;
+}
+
+MSDLL bool device::is_tx_channel_available(uint32_t channel) {
+    return channel < MAX_TX_CHANNELS && s->tx.ch[channel].avail != 0;
 }
 
 #ifdef _WIN32
