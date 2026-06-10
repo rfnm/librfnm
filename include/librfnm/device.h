@@ -256,6 +256,10 @@ namespace rfnm {
         std::unique_ptr<asio::ip::udp::socket> rfnm_data_socket_udp;*/
 
         std::unique_ptr<asio::ip::tcp::socket> rfnm_ctrl_socket_tcp;
+        // Serializes a full control-socket transaction (SET write, or GET write+read).
+        // Without it, the worker status poll and main-thread get/apply/set race on the
+        // single TCP control socket and consume each other's responses.
+        std::mutex rfnm_ctrl_socket_tcp_mutex;
 
         inline static std::shared_ptr<asio::io_context> tcp_data_io_context;
         inline static std::shared_ptr<asio::ip::tcp::socket> tcp_data_socket;

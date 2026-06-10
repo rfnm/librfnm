@@ -1875,7 +1875,13 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
     }
     if (s->transport_status.transport == TRANSPORT_TCP) {
         // CHANGED: Use TCP instead of UDP for control transfers
-        
+
+        // Serialize the whole request/response transaction on the shared control socket.
+        // Scoped to TCP only (USB/LOCAL don't share a stream socket) and held just for one
+        // transaction, so apply()'s poll loop and the worker status poll interleave at
+        // transaction granularity instead of corrupting each other's responses.
+        std::lock_guard<std::mutex> ctrl_lock(rfnm_ctrl_socket_tcp_mutex);
+
         try {
             struct rfnm_tcp_ctrl_header header;
             header.cmd = type & 0xff;
