@@ -252,10 +252,6 @@ namespace rfnm {
         std::unique_ptr<asio::io_context> rfnm_ctrl_ioctx_tcp;
         std::unique_ptr<asio::ip::udp::socket> rfnm_ctrl_socket_udp;
 
-        /*asio::ip::udp::endpoint rfnm_data_ep_udp_tx;
-        asio::ip::udp::endpoint rfnm_data_ep_udp_rx;
-        std::unique_ptr<asio::io_context> rfnm_data_ioctx_tcp;
-        std::unique_ptr<asio::ip::udp::socket> rfnm_data_socket_udp;*/
 
         std::unique_ptr<asio::ip::tcp::socket> rfnm_ctrl_socket_tcp;
         // Serializes a full control-socket transaction (SET write, or GET write+read).

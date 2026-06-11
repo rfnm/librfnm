@@ -97,3 +97,26 @@ Finally, the library can be installed using
 ```
 sudo make install
 ```
+
+# Ethernet streaming performance
+
+The ethernet (TCP) transport works on any network with no special setup: the
+device and host negotiate the usable packet size automatically (TCP MSS), so an
+ordinary MTU-1500 host streams correctly out of the box, topping out near
+**~77 Msps** on a 2.5 Gbps link.
+
+For the full rate (up to **~90 Msps** sustained on 2.5 Gbps), enable jumbo
+frames on the host NIC that connects to the device, e.g. on Linux:
+
+```
+sudo ip link set <interface> mtu 8000
+```
+
+(Windows: adapter properties -> Jumbo Packet; macOS: Hardware -> MTU.) Every
+switch between the host and the device must also forward jumbo frames — if any
+hop silently drops them, set the host NIC back to MTU 1500. The device side
+already defaults to MTU 8000 on USB ethernet adapters.
+
+librfnm logs the negotiated MSS when it connects — `jumbo frames active`
+confirms the fast path; `jumbo frames inactive` means the host NIC or the path
+is limiting the rate.

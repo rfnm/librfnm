@@ -1,8 +1,15 @@
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <librfnm/device.h>
 #include <librfnm/rx_stream.h>
 #include <spdlog/spdlog.h>
 #include <libusb-1.0/libusb.h>
+
+#ifndef _WIN32
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#endif
 
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
 #include <poll.h>
@@ -504,9 +511,29 @@ void device::threadfn(size_t thread_index) {
                 tcp_data_socket->connect(rfnm_data_ep_tcp);
                 tcp_data_socket->set_option(asio::ip::tcp::no_delay(true));
 
-                // Set socket buffer sizes
-                tcp_data_socket->set_option(asio::socket_base::receive_buffer_size(1024 * 1024 * 4));
-                tcp_data_socket->set_option(asio::socket_base::send_buffer_size(1024 * 1024 * 4));
+                // Deliberately NOT setting SO_RCVBUF/SO_SNDBUF: an explicit value is
+                // clamped to net.core.rmem_max (~208 KB on stock hosts) and locks the
+                // buffer there, pinning the TCP receive window at ~256 KB - which
+                // capped streaming at ~1.6 Gbps (sender 97.7% rwnd-limited). Kernel
+                // autotuning is exempt from that clamp and grows to tcp_rmem max.
+
+#if defined(__linux__) || defined(__APPLE__)
+                // surface the negotiated MSS: jumbo frames decide whether the data
+                // path tops out near ~77 or ~90 Msps on a 2.5G link, and a silently
+                // small MSS is otherwise invisible to the user
+                {
+                    int mss = 0;
+                    socklen_t mss_len = sizeof(mss);
+                    if (getsockopt(tcp_data_socket->native_handle(), IPPROTO_TCP, TCP_MAXSEG, &mss, &mss_len) == 0 && mss > 0) {
+                        if (mss < 2000) {
+                            spdlog::info("data path MSS {} (jumbo frames inactive): TCP streaming caps near ~77 Msps; "
+                                         "set the host NIC MTU to 8000 on a jumbo-capable path for rates up to ~90 Msps", mss);
+                        } else {
+                            spdlog::info("data path MSS {} (jumbo frames active)", mss);
+                        }
+                    }
+                }
+#endif
 
                 tcp_data_connected = true;
                 spdlog::info("Thread {} connected to TCP data port", thread_index);
@@ -1523,13 +1550,19 @@ MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
 
 
 
-    spdlog::info("cc {} -> {} size {} adc {} remote {}; ok {} dropped {} ({:.4f}%)",
-        old_cc, rx_s.usb_cc[adc_id], queue_size, adc_id, static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[adc_id]),
-        rx_s.usb_cc_ok[adc_id], rx_s.usb_cc_dropped[adc_id],
-
-        rx_s.usb_cc_ok[adc_id] > 0 ? ((100.0 * rx_s.usb_cc_dropped[adc_id] / rx_s.usb_cc_ok[adc_id])) : 0
-
-    );
+    // saturation produces thousands of drop events per second - rate-limit the log
+    // (counters keep accumulating) and report drops as a share of all packets
+    static std::atomic<int64_t> last_drop_log_ms{0};
+    int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    int64_t prev_ms = last_drop_log_ms.load(std::memory_order_relaxed);
+    if (now_ms - prev_ms >= 1000 && last_drop_log_ms.compare_exchange_strong(prev_ms, now_ms)) {
+        uint64_t total_cc = rx_s.usb_cc_ok[adc_id] + rx_s.usb_cc_dropped[adc_id];
+        spdlog::info("cc {} -> {} size {} adc {} remote {}; ok {} dropped {} ({:.4f}%)",
+            old_cc, rx_s.usb_cc[adc_id], queue_size, adc_id, static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[adc_id]),
+            rx_s.usb_cc_ok[adc_id], rx_s.usb_cc_dropped[adc_id],
+            total_cc > 0 ? (100.0 * rx_s.usb_cc_dropped[adc_id] / total_cc) : 0);
+    }
 }
 
 
@@ -2095,7 +2128,10 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
                 return RFNM_API_TIMEOUT;
             }
 
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            // back off while the device works through a slow path (e.g. a reclock)
+            // so the control socket isn't hammered for seconds at 1ms intervals
+            int64_t poll_ms = 1 + us_int.count() / 20000;
+            std::this_thread::sleep_for(std::chrono::milliseconds(std::min<int64_t>(poll_ms, 50)));
         }
     }
 
@@ -2131,11 +2167,14 @@ MSDLL rfnm_api_failcode device::set_samp_rate(uint64_t freq, uint32_t timeout_us
         }
 
         auto tnow = std::chrono::high_resolution_clock::now();
-        if (std::chrono::duration_cast<std::chrono::microseconds>(tnow - tstart).count() > timeout_us) {
+        int64_t us_int = std::chrono::duration_cast<std::chrono::microseconds>(tnow - tstart).count();
+        if (us_int > timeout_us) {
             return RFNM_API_TIMEOUT;
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // same backoff as apply(): a samp-rate change triggers a multi-second reclock
+        int64_t poll_ms = 1 + us_int / 20000;
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::min<int64_t>(poll_ms, 50)));
     }
 }
 
