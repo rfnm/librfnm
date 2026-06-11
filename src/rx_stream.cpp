@@ -198,10 +198,14 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
                 ch_samples_to_copy -= pad_samples;
             }
 
-            uint8_t *src = pending_rx_buf[channel]->buf +
-                (RFNM_USB_RX_PACKET_ELEM_CNT - samples_left[channel]) * bytes_per_ele;
-            std::memcpy(dst, src, ch_samples_to_copy * bytes_per_ele);
-            samples_left[channel] -= ch_samples_to_copy;
+            // pending_rx_buf[channel] is nullptr after a dqbuf timeout, which also
+            // forces samples_to_copy to 0 - don't touch the buffer in that case
+            if (ch_samples_to_copy) {
+                uint8_t *src = pending_rx_buf[channel]->buf +
+                    (RFNM_USB_RX_PACKET_ELEM_CNT - samples_left[channel]) * bytes_per_ele;
+                std::memcpy(dst, src, ch_samples_to_copy * bytes_per_ele);
+                samples_left[channel] -= ch_samples_to_copy;
+            }
         }
 
         read_elems += samples_to_copy;
