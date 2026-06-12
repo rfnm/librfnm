@@ -750,7 +750,14 @@ void device::threadfn(size_t thread_index) {
 
             if (lrxbuf->magic != 0x7ab8bd6f || lrxbuf->adc_id > 3 ||
                     lrxbuf->elem_cnt == 0 || lrxbuf->elem_cnt > RFNM_USB_RX_PACKET_ELEM_CNT) {
-                //spdlog::error("Wrong magic");
+                if (getenv("RFNM_DEBUG_RX")) {
+                    static std::atomic<int> dbg_rej{0};
+                    int nr = ++dbg_rej;
+                    if (nr <= 10 || nr % 500 == 0) {
+                        spdlog::info("REJECT n {} magic {:x} adc {} elem_cnt {} transferred {}", nr,
+                            (uint32_t)lrxbuf->magic, (uint32_t)lrxbuf->adc_id, (uint32_t)lrxbuf->elem_cnt, transferred);
+                    }
+                }
                 std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                 rx_s.in.push(buf);
                 rx_s.cv.notify_one();
@@ -778,6 +785,12 @@ void device::threadfn(size_t thread_index) {
                 int n = ++dbg_push;
                 if (n <= 15 || n % 100 == 0) {
                     spdlog::info("PUSH n {} adc {} usb_cc {} magic_ok", n, (uint32_t)lrxbuf->adc_id, (uint64_t)lrxbuf->usb_cc);
+                }
+            }
+            if (getenv("RFNM_DEBUG_RX_CCLOG")) {
+                static FILE *ccf = fopen(getenv("RFNM_DEBUG_RX_CCLOG"), "w");
+                if (ccf) {
+                    fprintf(ccf, "%llu %u %u\n", (unsigned long long)lrxbuf->usb_cc, (uint32_t)lrxbuf->adc_id, (uint32_t)lrxbuf->elem_cnt);
                 }
             }
             {
@@ -1638,7 +1651,11 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
 
     std::vector<uint64_t> discarded;
     while (queue_size > 1) {
-        if ((buf->usb_cc + 1) < rx_s.usb_cc[adc_id] || (/*stale_high_cnt < 4 &&*/ buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN))) {
+        // discard anything OLDER than expected, INCLUDING expected-1: a duplicate of the
+        // just-consumed cc (kernel ring wrap re-stamping a buffer held by a late in-flight
+        // req) otherwise sits at the queue top forever - neither continuous nor discardable -
+        // and wedges the stream behind it until the timeout mass-discard kills the session
+        if (buf->usb_cc < rx_s.usb_cc[adc_id] || (/*stale_high_cnt < 4 &&*/ buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN))) {
 
             /*if (discarded.empty() && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN)) {
                 stale_high_cnt++;
