@@ -652,7 +652,7 @@ void device::threadfn(size_t thread_index) {
                 // sample prefix and declares the count in the header (latency-deadline flush);
                 // every transfer must be self-consistent with its header
                 if ((size_t)transferred != RFNM_USB_RX_PACKET_HEAD_SIZE + (size_t)lrxbuf->elem_cnt * 3) {
-                    spdlog::error("thread loop RX usb wrong size, {}, {}", transferred, tpm.ep_id);
+                    spdlog::error("thread loop RX usb wrong size, {}, ep {}, elem_cnt {}, magic {:x}", transferred, tpm.ep_id, (uint32_t)lrxbuf->elem_cnt, (uint32_t)lrxbuf->magic);
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
                     rx_s.cv.notify_one();
