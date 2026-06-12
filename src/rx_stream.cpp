@@ -184,10 +184,12 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
         for (uint32_t channel : channels) {
             size_t ch_samples_to_copy = samples_to_copy;
             uint8_t *dst = reinterpret_cast<uint8_t *>(buffs[buf_idx++]) + read_elems * bytes_per_ele;
+            // variable-size packets: each buffer declares its own valid sample count
+            size_t pkt_elems = pending_rx_buf[channel] ? pending_rx_buf[channel]->elem_cnt : 0;
 
             // large samples_left value means prepend zero padding for alignment purposes
-            if (samples_left[channel] > RFNM_USB_RX_PACKET_ELEM_CNT) {
-                size_t pad_samples = samples_left[channel] - RFNM_USB_RX_PACKET_ELEM_CNT;
+            if (samples_left[channel] > pkt_elems) {
+                size_t pad_samples = samples_left[channel] - pkt_elems;
                 if (pad_samples > ch_samples_to_copy) {
                     pad_samples = ch_samples_to_copy;
                 }
@@ -202,7 +204,7 @@ MSDLL rfnm_api_failcode rx_stream::read(void * const * buffs, size_t elems_to_re
             // forces samples_to_copy to 0 - don't touch the buffer in that case
             if (ch_samples_to_copy) {
                 uint8_t *src = pending_rx_buf[channel]->buf +
-                    (RFNM_USB_RX_PACKET_ELEM_CNT - samples_left[channel]) * bytes_per_ele;
+                    (pkt_elems - samples_left[channel]) * bytes_per_ele;
                 std::memcpy(dst, src, ch_samples_to_copy * bytes_per_ele);
                 samples_left[channel] -= ch_samples_to_copy;
             }
@@ -368,10 +370,12 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool first) {
         ret = dev.rx_dqbuf(&pending_rx_buf[channel], channel_flags[channel], wait_us);
         if (ret) break;
 
-        // Always use the full buffer - no phytimer-based adjustments
-        samples_left[channel] = RFNM_USB_RX_PACKET_ELEM_CNT;
+        // variable-size packets: the buffer declares how many samples it carries
+        samples_left[channel] = pending_rx_buf[channel]->elem_cnt;
 
         if (dc_correction[channel]) {
+            size_t dc_elems = pending_rx_buf[channel]->elem_cnt;
+
             // periodically recalibrate DC offset to account for drift
             if ((pending_rx_buf[channel]->usb_cc & 0xF) == 0 || first) {
                 float filter_factor = first ? 1.0f : 0.1f;
@@ -379,15 +383,15 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool first) {
                 switch (dev.get_transport_status()->rx_stream_format) {
                 case STREAM_FORMAT_CS8:
                     measQuadDcOffset(reinterpret_cast<int8_t*>(pending_rx_buf[channel]->buf),
-                        RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i8, filter_factor);
+                        dc_elems * 2, dc_offsets[channel].i8, filter_factor);
                     break;
                 case STREAM_FORMAT_CS16:
                     measQuadDcOffset(reinterpret_cast<int16_t*>(pending_rx_buf[channel]->buf),
-                        RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i16, filter_factor);
+                        dc_elems * 2, dc_offsets[channel].i16, filter_factor);
                     break;
                 case STREAM_FORMAT_CF32:
                     measQuadDcOffset(reinterpret_cast<float*>(pending_rx_buf[channel]->buf),
-                        RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].f32, filter_factor);
+                        dc_elems * 2, dc_offsets[channel].f32, filter_factor);
                     break;
                 }
             }
@@ -395,15 +399,15 @@ rfnm_api_failcode rx_stream::rx_dqbuf_multi(uint32_t timeout_us, bool first) {
             switch (dev.get_transport_status()->rx_stream_format) {
             case STREAM_FORMAT_CS8:
                 applyQuadDcOffset(reinterpret_cast<int8_t*>(pending_rx_buf[channel]->buf),
-                    RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i8);
+                    dc_elems * 2, dc_offsets[channel].i8);
                 break;
             case STREAM_FORMAT_CS16:
                 applyQuadDcOffset(reinterpret_cast<int16_t*>(pending_rx_buf[channel]->buf),
-                    RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].i16);
+                    dc_elems * 2, dc_offsets[channel].i16);
                 break;
             case STREAM_FORMAT_CF32:
                 applyQuadDcOffset(reinterpret_cast<float*>(pending_rx_buf[channel]->buf),
-                    RFNM_USB_RX_PACKET_ELEM_CNT * 2, dc_offsets[channel].f32);
+                    dc_elems * 2, dc_offsets[channel].f32);
                 break;
             }
         }

@@ -473,6 +473,7 @@ void device::threadfn(size_t thread_index) {
     struct rfnm_rx_usb_buf* lrxbuf = new rfnm_rx_usb_buf();
     struct rfnm_tx_usb_buf* ltxbuf = new rfnm_tx_usb_buf();
     int transferred;
+    uint32_t pkt_elems;
     auto& tpm = thread_data[thread_index];
     int r;
 
@@ -617,6 +618,10 @@ void device::threadfn(size_t thread_index) {
 
 
 #endif
+            // full packet unless the USB path below sees a short (variable-size) transfer;
+            // LOCAL and TCP transports always move full-size records
+            pkt_elems = RFNM_USB_RX_PACKET_ELEM_CNT;
+
             if (s->transport_status.transport == TRANSPORT_USB) {
                 if (!usb_handle->primary) {
                     spdlog::info("Thread {} detected force shutdown during USB op", thread_index);
@@ -649,11 +654,22 @@ void device::threadfn(size_t thread_index) {
                 }
 
                 if (transferred != RFNM_USB_RX_PACKET_SIZE) {
-                    spdlog::error("thread loop RX usb wrong size, {}, {}", transferred, tpm.ep_id);
-                    std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
-                    rx_s.in.push(buf);
-                    rx_s.cv.notify_one();
-                    goto skip_rx;
+                    // variable-size packet: the device shortens the wire transfer to the valid
+                    // sample prefix and declares the count in the header (latency-deadline flush).
+                    // A full-size transfer is accepted unconditionally (old firmware never writes
+                    // elem_cnt), a short one must be self-consistent with its header.
+                    if (transferred >= (int)RFNM_USB_RX_PACKET_HEAD_SIZE &&
+                            lrxbuf->elem_cnt > 0 &&
+                            lrxbuf->elem_cnt <= RFNM_USB_RX_PACKET_ELEM_CNT &&
+                            (size_t)transferred == RFNM_USB_RX_PACKET_HEAD_SIZE + (size_t)lrxbuf->elem_cnt * 3) {
+                        pkt_elems = lrxbuf->elem_cnt;
+                    } else {
+                        spdlog::error("thread loop RX usb wrong size, {}, {}", transferred, tpm.ep_id);
+                        std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
+                        rx_s.in.push(buf);
+                        rx_s.cv.notify_one();
+                        goto skip_rx;
+                    }
                 }
             }
 
@@ -754,19 +770,20 @@ void device::threadfn(size_t thread_index) {
             }
 
             if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS8) {
-                unpack_12_to_cs8(buf->buf, (uint8_t*)lrxbuf->buf, RFNM_USB_RX_PACKET_ELEM_CNT);
+                unpack_12_to_cs8(buf->buf, (uint8_t*)lrxbuf->buf, pkt_elems);
             }
             else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS16) {
-                unpack_12_to_cs16(buf->buf, (uint8_t*)lrxbuf->buf, RFNM_USB_RX_PACKET_ELEM_CNT);
+                unpack_12_to_cs16(buf->buf, (uint8_t*)lrxbuf->buf, pkt_elems);
             }
             else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CF32) {
-                unpack_12_to_cf32(buf->buf, (uint8_t*)lrxbuf->buf, RFNM_USB_RX_PACKET_ELEM_CNT);
+                unpack_12_to_cf32(buf->buf, (uint8_t*)lrxbuf->buf, pkt_elems);
             }
 
             buf->adc_cc = lrxbuf->adc_cc;
             buf->adc_id = lrxbuf->adc_id;
             buf->usb_cc = lrxbuf->usb_cc;
             buf->phytimer = lrxbuf->phytimer;
+            buf->elem_cnt = pkt_elems;
 
             if (getenv("RFNM_DEBUG_RX")) {
                 static std::atomic<int> dbg_push{0};
@@ -1617,13 +1634,16 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         max_allowed_in_flight = RX_MAX_INFLIGHT_BUF_CNT_ETH;
     }
 
+    // the TCP/local stream carries the local ring's cc, which ticks independently of the usb
+    // ring's cc (variable-size usb packets advance the usb counter faster) - compare like to like
+    uint64_t dev_last_qbuf = s->dev_status.usb_adc_last_qbuf[adc_id];
+    if (s->transport_status.transport == TRANSPORT_TCP || s->transport_status.transport == TRANSPORT_LOCAL) {
+        dev_last_qbuf = s->dev_status.local_adc_last_qbuf[adc_id];
+    }
 
-    if (//s->transport_status.transport != TRANSPORT_LOCAL && 
-
-
-        abs(((int64_t)s->dev_status.usb_adc_last_qbuf[adc_id]) - ((int64_t)rx_s.usb_cc[adc_id])) > max_allowed_in_flight) {
-        spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[adc_id]));
-        rx_s.usb_cc[adc_id] = s->dev_status.usb_adc_last_qbuf[adc_id];
+    if (abs(((int64_t)dev_last_qbuf) - ((int64_t)rx_s.usb_cc[adc_id])) > max_allowed_in_flight) {
+        spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], static_cast<uint64_t>(dev_last_qbuf));
+        rx_s.usb_cc[adc_id] = dev_last_qbuf;
     }
 
     //static int stale_high_cnt = 0;

@@ -237,6 +237,9 @@ RFNM_PACKED_STRUCT(
 	struct rfnm_stream_stats stream_stats;
 	//struct rfnm_m7_status m7_status;
 
+	// the local/TCP transport keeps its own RX packet counter: variable-size USB packets make the
+	// usb ring cc advance faster than the local ring cc, so TCP/local consumers must check this one
+	uint64_t local_adc_last_qbuf[4];
 }
 );
 
@@ -292,7 +295,7 @@ RFNM_PACKED_STRUCT(
 	uint32_t dropped;
 	uint32_t adc_cc;
 	uint64_t usb_cc;
-	uint32_t padding[1];
+	uint32_t elem_cnt;	// samples in buf (variable-size packets: latency-deadline partial flush)
 	uint8_t buf[LA_RX_BASE_BUFSIZE_12 * RFNM_RX_USB_BUF_MULTI];
 }
 );

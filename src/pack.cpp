@@ -17,7 +17,9 @@ MSDLL bool device::unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_
         }
         
 #ifdef __has_builtin
-        if (sample_cnt & 255)
+        // variable-size packets arrive in multiples of 64 samples (device sub granularity),
+        // so the vectorizer hint must not promise more than that
+        if (sample_cnt & 63)
             __builtin_unreachable();
 #endif
     

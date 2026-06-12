@@ -61,6 +61,9 @@ namespace rfnm {
         uint32_t adc_cc;
         uint64_t usb_cc;
         uint32_t adc_id;
+        // valid samples in buf (variable-size packets: the device flushes partial packets after a
+        // latency deadline, so this can be < RFNM_USB_RX_PACKET_ELEM_CNT; buf is always allocated at max)
+        uint32_t elem_cnt;
     };
 
     struct tx_buf {
