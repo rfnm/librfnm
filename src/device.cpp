@@ -473,7 +473,6 @@ void device::threadfn(size_t thread_index) {
     struct rfnm_rx_usb_buf* lrxbuf = new rfnm_rx_usb_buf();
     struct rfnm_tx_usb_buf* ltxbuf = new rfnm_tx_usb_buf();
     int transferred;
-    uint32_t pkt_elems;
     auto& tpm = thread_data[thread_index];
     int r;
 
@@ -618,10 +617,6 @@ void device::threadfn(size_t thread_index) {
 
 
 #endif
-            // full packet unless the USB path below sees a short (variable-size) transfer;
-            // LOCAL and TCP transports always move full-size records
-            pkt_elems = RFNM_USB_RX_PACKET_ELEM_CNT;
-
             if (s->transport_status.transport == TRANSPORT_USB) {
                 if (!usb_handle->primary) {
                     spdlog::info("Thread {} detected force shutdown during USB op", thread_index);
@@ -653,23 +648,15 @@ void device::threadfn(size_t thread_index) {
                     goto skip_rx;
                 }
 
-                if (transferred != RFNM_USB_RX_PACKET_SIZE) {
-                    // variable-size packet: the device shortens the wire transfer to the valid
-                    // sample prefix and declares the count in the header (latency-deadline flush).
-                    // A full-size transfer is accepted unconditionally (old firmware never writes
-                    // elem_cnt), a short one must be self-consistent with its header.
-                    if (transferred >= (int)RFNM_USB_RX_PACKET_HEAD_SIZE &&
-                            lrxbuf->elem_cnt > 0 &&
-                            lrxbuf->elem_cnt <= RFNM_USB_RX_PACKET_ELEM_CNT &&
-                            (size_t)transferred == RFNM_USB_RX_PACKET_HEAD_SIZE + (size_t)lrxbuf->elem_cnt * 3) {
-                        pkt_elems = lrxbuf->elem_cnt;
-                    } else {
-                        spdlog::error("thread loop RX usb wrong size, {}, {}", transferred, tpm.ep_id);
-                        std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
-                        rx_s.in.push(buf);
-                        rx_s.cv.notify_one();
-                        goto skip_rx;
-                    }
+                // variable-size packet: the device shortens the wire transfer to the valid
+                // sample prefix and declares the count in the header (latency-deadline flush);
+                // every transfer must be self-consistent with its header
+                if ((size_t)transferred != RFNM_USB_RX_PACKET_HEAD_SIZE + (size_t)lrxbuf->elem_cnt * 3) {
+                    spdlog::error("thread loop RX usb wrong size, {}, {}", transferred, tpm.ep_id);
+                    std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
+                    rx_s.in.push(buf);
+                    rx_s.cv.notify_one();
+                    goto skip_rx;
                 }
             }
 
@@ -761,7 +748,8 @@ void device::threadfn(size_t thread_index) {
             }
 
 
-            if (lrxbuf->magic != 0x7ab8bd6f || lrxbuf->adc_id > 3) {
+            if (lrxbuf->magic != 0x7ab8bd6f || lrxbuf->adc_id > 3 ||
+                    lrxbuf->elem_cnt == 0 || lrxbuf->elem_cnt > RFNM_USB_RX_PACKET_ELEM_CNT) {
                 //spdlog::error("Wrong magic");
                 std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                 rx_s.in.push(buf);
@@ -770,20 +758,20 @@ void device::threadfn(size_t thread_index) {
             }
 
             if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS8) {
-                unpack_12_to_cs8(buf->buf, (uint8_t*)lrxbuf->buf, pkt_elems);
+                unpack_12_to_cs8(buf->buf, (uint8_t*)lrxbuf->buf, lrxbuf->elem_cnt);
             }
             else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS16) {
-                unpack_12_to_cs16(buf->buf, (uint8_t*)lrxbuf->buf, pkt_elems);
+                unpack_12_to_cs16(buf->buf, (uint8_t*)lrxbuf->buf, lrxbuf->elem_cnt);
             }
             else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CF32) {
-                unpack_12_to_cf32(buf->buf, (uint8_t*)lrxbuf->buf, pkt_elems);
+                unpack_12_to_cf32(buf->buf, (uint8_t*)lrxbuf->buf, lrxbuf->elem_cnt);
             }
 
             buf->adc_cc = lrxbuf->adc_cc;
             buf->adc_id = lrxbuf->adc_id;
             buf->usb_cc = lrxbuf->usb_cc;
             buf->phytimer = lrxbuf->phytimer;
-            buf->elem_cnt = pkt_elems;
+            buf->elem_cnt = lrxbuf->elem_cnt;
 
             if (getenv("RFNM_DEBUG_RX")) {
                 static std::atomic<int> dbg_push{0};
