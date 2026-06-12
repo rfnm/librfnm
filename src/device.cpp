@@ -768,6 +768,13 @@ void device::threadfn(size_t thread_index) {
             buf->usb_cc = lrxbuf->usb_cc;
             buf->phytimer = lrxbuf->phytimer;
 
+            if (getenv("RFNM_DEBUG_RX")) {
+                static std::atomic<int> dbg_push{0};
+                int n = ++dbg_push;
+                if (n <= 15 || n % 100 == 0) {
+                    spdlog::info("PUSH n {} adc {} usb_cc {} magic_ok", n, (uint32_t)lrxbuf->adc_id, (uint64_t)lrxbuf->usb_cc);
+                }
+            }
             {
                 std::lock_guard<std::mutex> lockGuard(rx_s.out_mutex);
                 rx_s.out[lrxbuf->adc_id].push(buf);
@@ -1588,6 +1595,9 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     // special case for first buffer of stream
     if (rx_s.usb_cc[adc_id] == UINT64_MAX) {
         int ret = 0;
+        if (getenv("RFNM_DEBUG_RX")) {
+            spdlog::info("CCINIT adc {} queue_size {}", adc_id, queue_size);
+        }
 
         // wait for at least 10 buffers to come in case they are out-of-order
         if (queue_size >= 10) {
@@ -1629,6 +1639,9 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             }*/
 
             uint64_t usb_cc = buf->usb_cc;
+            if (getenv("RFNM_DEBUG_RX")) {
+                spdlog::info("DISCARD adc {} buf_cc {} expected_cc {} qsize {}", adc_id, usb_cc, rx_s.usb_cc[adc_id], queue_size);
+            }
             std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
             rx_s.out[adc_id].pop();
             rx_s.in.push(buf);
@@ -1672,7 +1685,13 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         return 1;
     }
     else {
-        if (queue_size > RX_RECOMB_BUF_LEN) {
+        if (getenv("RFNM_DEBUG_RX") && buf->usb_cc != rx_s.usb_cc[adc_id]) {
+        static int dbg_throttle;
+        if (++dbg_throttle % 50 == 1) {
+            spdlog::info("NOTCONT adc {} top_cc {} expected {} qsize {}", adc_id, buf->usb_cc, rx_s.usb_cc[adc_id], queue_size);
+        }
+    }
+    if (queue_size > RX_RECOMB_BUF_LEN) {
             dqbuf_overwrite_cc(adc_id, acquire_lock);
         }
         return 0;
@@ -1734,6 +1753,12 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
         }
 
         if (!dqbuf_is_cc_continuous(required_adc_id, 1)) {
+            if (getenv("RFNM_DEBUG_RX")) {
+                std::lock_guard<std::mutex> lockGuard(rx_s.out_mutex);
+                uint64_t topcc = rx_s.out[required_adc_id].size() ? rx_s.out[required_adc_id].top()->usb_cc : 0;
+                spdlog::info("STUCK adc {} expected_cc {} qsize {} top_cc {}", required_adc_id,
+                    rx_s.usb_cc[required_adc_id], rx_s.out[required_adc_id].size(), topcc);
+            }
             if (timeout_us >= 10000) {
                 spdlog::info("cc timeout {} adc {}", rx_s.usb_cc[required_adc_id], required_adc_id);
             }
