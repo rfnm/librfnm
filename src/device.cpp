@@ -1003,7 +1003,9 @@ void device::threadfn(size_t thread_index) {
             auto tnow = high_resolution_clock::now();
             auto ms_int = duration_cast<milliseconds>(tnow - tlast);
 
-            if (1 && ms_int.count() > 5) {
+            // TX closed-loop pacing rides on dev_status freshness; with small TX packets a
+            // 5 ms status lag forces deep pipelines (or underruns), so poll at >=1 ms.
+            if (1 && ms_int.count() > 1) {
 
 
                 if (s->transport_status.transport == TRANSPORT_TCP) {

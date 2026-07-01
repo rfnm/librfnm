@@ -275,7 +275,7 @@ typedef enum {
 
 #define RFNM_RX_USB_BUF_MULTI 80
 #define RFNM_RX_USB_BUF_SIZE 80
-#define RFNM_TX_USB_BUF_MULTI 80
+#define RFNM_TX_USB_BUF_MULTI 8	// was 80: 20480-sample (1.33 ms at 15.36M) TX packets floored the TX latency; 2048-sample packets pace 10x finer
 
 #define RFNM_LA9310_DMA_RX_SIZE		(256)
 #define LA_RX_BASE_BUFSIZE (4*RFNM_LA9310_DMA_RX_SIZE)
