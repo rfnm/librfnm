@@ -469,6 +469,30 @@ struct retrans_req_entry {
 
 
 
+
+// ---- async USB TX engine: ordered endpoint + pipelined URBs -------------------------
+// One sync-bulk thread is in-order but caps ~50-60 MSPS (transfer RTT gates it); many
+// threads reach line rate but reorder the stream arbitrarily (holes). Async URBs
+// pipelined on ONE endpoint give both: USB guarantees per-endpoint FIFO order, and
+// K outstanding transfers keep the wire full. Single TX worker thread owns all state.
+#define RFNM_TX_ASYNC_URBS 12
+struct usb_tx_async_state {
+    libusb_transfer* xfer[RFNM_TX_ASYNC_URBS];
+    uint8_t* xbuf[RFNM_TX_ASYNC_URBS];
+    rfnm::tx_buf* app[RFNM_TX_ASYNC_URBS];
+    // 0 = free, 1 = in flight, 2 = done-ok, 3 = done-error (all set/read on the TX thread;
+    // libusb callbacks run inside libusb_handle_events on the same thread)
+    int state[RFNM_TX_ASYNC_URBS];
+    int initialized;
+};
+
+static void rfnm_usb_tx_async_cb(struct libusb_transfer* t) {
+    int* slot_state = (int*)t->user_data;
+    *slot_state = (t->status == LIBUSB_TRANSFER_COMPLETED && t->actual_length == t->length) ? 2 : 3;
+}
+// -------------------------------------------------------------------------------------
+
+
 void device::threadfn(size_t thread_index) {
     struct rfnm_rx_usb_buf* lrxbuf = new rfnm_rx_usb_buf();
     struct rfnm_tx_usb_buf* ltxbuf = new rfnm_tx_usb_buf();
@@ -874,13 +898,66 @@ void device::threadfn(size_t thread_index) {
                     break;
                 }
                 libusb_device_handle* lusb_handle = usb_handle->primary;
-                if (0 && s->transport_status.usb_boost_connected) {
-                    std::lock_guard<std::mutex> lockGuard(s_transport_pp_mutex);
-                    if (s->transport_status.boost_pp_tx) {
-                        lusb_handle = usb_handle->boost;
+
+                // async pipelined sends on ONE ordered endpoint (see engine notes above)
+                static thread_local usb_tx_async_state az = {};
+                if (!az.initialized) {
+                    for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                        az.xfer[q] = libusb_alloc_transfer(0);
+                        az.xbuf[q] = (uint8_t*)malloc(RFNM_USB_TX_PACKET_SIZE);
+                        az.state[q] = 0;
                     }
-                    s->transport_status.boost_pp_tx = !s->transport_status.boost_pp_tx;
+                    az.initialized = 1;
                 }
+                struct timeval tv_zero = {0, 0};
+                libusb_handle_events_timeout(nullptr, &tv_zero);
+                for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                    if (az.state[q] == 2) {
+                        std::lock_guard<std::mutex> lockGuard(tx_s.out_mutex);
+                        tx_s.out.push(az.app[q]);
+                        tx_s.cv.notify_one();
+                        az.state[q] = 0;
+                    } else if (az.state[q] == 3) {
+                        spdlog::error("TX async transfer failed, requeueing app buf");
+                        std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+                        tx_s.in.push(az.app[q]);
+                        reorder_tx_queue_nolock(tx_s);
+                        az.state[q] = 0;
+                    }
+                }
+                int slot = -1;
+                for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                    if (az.state[q] == 0) { slot = q; break; }
+                }
+                if (slot < 0) {
+                    // pipeline full: give completions a moment, put the buf back in order
+                    {
+                        std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+                        tx_s.in.push(buf);
+                        reorder_tx_queue_nolock(tx_s);
+                    }
+                    struct timeval tv_wait = {0, 1000};
+                    libusb_handle_events_timeout(nullptr, &tv_wait);
+                    goto read_dev_status;
+                }
+                struct rfnm_tx_usb_buf* axbuf = (struct rfnm_tx_usb_buf*)az.xbuf[slot];
+                memcpy(axbuf, ltxbuf, RFNM_USB_TX_PACKET_HEAD_SIZE);
+                memcpy(axbuf->buf, ltxbuf->buf, tx_wire_len - RFNM_USB_TX_PACKET_HEAD_SIZE);
+                az.app[slot] = buf;
+                az.state[slot] = 1;
+                libusb_fill_bulk_transfer(az.xfer[slot], lusb_handle, (1 | LIBUSB_ENDPOINT_OUT),
+                    (uint8_t*)axbuf, tx_wire_len, rfnm_usb_tx_async_cb, &az.state[slot], 1000);
+                r = libusb_submit_transfer(az.xfer[slot]);
+                if (r) {
+                    spdlog::error("TX async submit fail {}", r);
+                    az.state[slot] = 0;
+                    std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+                    tx_s.in.push(buf);
+                    reorder_tx_queue_nolock(tx_s);
+                    goto read_dev_status;
+                }
+                // submitted in order; completion recycles the app buf on a later pass
+                goto read_dev_status;
 
                 r = libusb_bulk_transfer(lusb_handle, (((tpm.ep_id % 4) + 1) | LIBUSB_ENDPOINT_OUT),
                     (uint8_t*)ltxbuf, tx_wire_len, &transferred, 100);
@@ -1523,6 +1600,7 @@ MSDLL rfnm_api_failcode device::rx_qbuf(struct rx_buf* buf, bool new_buffer) {
     rx_s.cv.notify_one();
     return RFNM_API_OK;
 }
+
 
 MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us) {
     // elem_cnt selects the packet size: 0 = full, else a multiple of 256 samples (the
