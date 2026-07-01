@@ -1490,7 +1490,12 @@ MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
             thread_data[i].tx_active = ((i % 2) == 0) ? 1 : 0;
         }
         else {
-            thread_data[i].tx_active = 1;
+            // USB: a single TX thread, like TCP. 16 threads racing 4 endpoints send one
+            // logical stream arbitrarily out of order - deeper than any device-side
+            // resync horizon - punching holes in the stream. One thread on one endpoint
+            // is spec-guaranteed in-order. (Throughput beyond one sync-transfer thread
+            // comes later from async URBs on that one endpoint, not from more threads.)
+            thread_data[i].tx_active = (i == 0) ? 1 : 0;
         }
         thread_data[i].cv.notify_all();
     }
