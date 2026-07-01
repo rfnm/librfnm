@@ -72,6 +72,10 @@ namespace rfnm {
         uint32_t dac_cc;
         uint64_t usb_cc;
         uint32_t dac_id;
+        // samples to send from buf: 0 = full packet (RFNM_USB_TX_PACKET_ELEM_CNT); otherwise a
+        // multiple of 256 up to the full size. Small packets pace finer (latency), full packets
+        // amortize per-transfer costs (throughput) - pick per use case.
+        uint32_t elem_cnt;
     };
 
     class rx_buf_compare {

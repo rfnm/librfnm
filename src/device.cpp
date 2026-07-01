@@ -857,11 +857,15 @@ void device::threadfn(size_t thread_index) {
 
 
 
-            pack_cs16_to_12((uint8_t*)ltxbuf->buf, buf->buf, RFNM_USB_TX_PACKET_ELEM_CNT);
+            uint32_t tx_elems = buf->elem_cnt ? buf->elem_cnt : RFNM_USB_TX_PACKET_ELEM_CNT;
+            uint32_t tx_multi = (tx_elems * 3) / LA_TX_BASE_BUFSIZE_12;
+            uint32_t tx_wire_len = RFNM_USB_TX_PACKET_HEAD_SIZE + tx_multi * LA_TX_BASE_BUFSIZE_12;
+            pack_cs16_to_12((uint8_t*)ltxbuf->buf, buf->buf, tx_elems);
             ltxbuf->dac_cc = buf->dac_cc;
             ltxbuf->dac_id = buf->dac_id;
             ltxbuf->usb_cc = buf->usb_cc;
             ltxbuf->phytimer = buf->phytimer;
+            ltxbuf->multi = tx_multi;
             ltxbuf->magic = 0x758f4d4a;
 
             if (s->transport_status.transport == TRANSPORT_USB) {
@@ -879,7 +883,7 @@ void device::threadfn(size_t thread_index) {
                 }
 
                 r = libusb_bulk_transfer(lusb_handle, (((tpm.ep_id % 4) + 1) | LIBUSB_ENDPOINT_OUT),
-                    (uint8_t*)ltxbuf, RFNM_USB_TX_PACKET_SIZE, &transferred, 100);
+                    (uint8_t*)ltxbuf, tx_wire_len, &transferred, 100);
                 if (r == LIBUSB_ERROR_NO_DEVICE || r == LIBUSB_ERROR_IO) {
                     // Device was reset or closed, exit gracefully
                     spdlog::info("Thread {} USB device lost, exiting", thread_index);
@@ -893,7 +897,7 @@ void device::threadfn(size_t thread_index) {
                     goto read_dev_status;
                 }
 
-                if (transferred != RFNM_USB_TX_PACKET_SIZE) {
+                if (transferred != (int)tx_wire_len) {
                     spdlog::error("thread loop TX usb wrong size, {}, {}", transferred, tpm.ep_id);
                     std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
                     tx_s.in.push(buf);
@@ -970,7 +974,7 @@ void device::threadfn(size_t thread_index) {
                 // CHANGED: Send over TCP instead of UDP with mutex protection
                 try {
                     std::lock_guard<std::mutex> lock(tcp_data_tx_mutex);
-                    asio::write(*tcp_data_socket, asio::buffer((uint8_t*)ltxbuf, RFNM_USB_TX_PACKET_SIZE));
+                    asio::write(*tcp_data_socket, asio::buffer((uint8_t*)ltxbuf, tx_wire_len));
                 }
                 catch (std::exception& e) {
                     spdlog::error("TCP TX error: {}", e.what());
@@ -1516,6 +1520,12 @@ MSDLL rfnm_api_failcode device::rx_qbuf(struct rx_buf* buf, bool new_buffer) {
 }
 
 MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us) {
+    // elem_cnt selects the packet size: 0 = full, else a multiple of 256 samples (the
+    // base-buf granularity the device consumes)
+    if (buf->elem_cnt && (buf->elem_cnt % (LA_TX_BASE_BUFSIZE_12 / 3) || buf->elem_cnt > RFNM_USB_TX_PACKET_ELEM_CNT)) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+
     //std::lock_guard<std::mutex> lockGuard1(tx_s.cc_mutex);
     std::lock_guard<std::mutex> lockGuard1(s_dev_status_mutex);
 

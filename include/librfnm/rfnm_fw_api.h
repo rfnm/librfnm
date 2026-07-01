@@ -275,7 +275,7 @@ typedef enum {
 
 #define RFNM_RX_USB_BUF_MULTI 80
 #define RFNM_RX_USB_BUF_SIZE 80
-#define RFNM_TX_USB_BUF_MULTI 8	// was 80: 20480-sample (1.33 ms at 15.36M) TX packets floored the TX latency; 2048-sample packets pace 10x finer
+#define RFNM_TX_USB_BUF_MULTI 80	// MAX slots per TX packet; the header's multi field says how many are present (variable-size packets: small for latency, full for throughput)
 
 #define RFNM_LA9310_DMA_RX_SIZE		(256)
 #define LA_RX_BASE_BUFSIZE (4*RFNM_LA9310_DMA_RX_SIZE)
@@ -308,7 +308,9 @@ RFNM_PACKED_STRUCT(
 	uint32_t dropped;
 	uint32_t dac_cc;
 	uint64_t usb_cc;
-	uint32_t padding[1];
+	// base bufs (256 samples each) present in this packet, 1..RFNM_TX_USB_BUF_MULTI;
+	// wire length = RFNM_USB_TX_PACKET_HEAD_SIZE + multi * LA_TX_BASE_BUFSIZE_12
+	uint32_t multi;
 	uint8_t buf[LA_TX_BASE_BUFSIZE_12 * RFNM_TX_USB_BUF_MULTI];
 }
 );
