@@ -182,3 +182,38 @@ MSDLL bool device::unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_
     #endif
     }
     
+    // cs16 payload converters for the local transport: the kernel already unpacked
+    // 12->16 (NEON) into the local ring, so the only remaining pass is the output
+    // format conversion. Scale conventions match the unpack_12_to_* family.
+    MSDLL bool device::convert_cs16_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt) {
+        memcpy(dest, src, sample_cnt * 4);
+        return true;
+    }
+
+    MSDLL bool device::convert_cs16_to_cf32(uint8_t* dest, uint8_t* src, size_t sample_cnt) {
+        const int16_t* __restrict s16 = (const int16_t*)src;
+        float* __restrict f = (float*)dest;
+        size_t vals = sample_cnt * 2;
+#ifdef __has_builtin
+        if (vals & 127)
+            __builtin_unreachable();
+#endif
+        for (size_t c = 0; c < vals; c++) {
+            f[c] = s16[c] / 32767.0f;
+        }
+        return true;
+    }
+
+    MSDLL bool device::convert_cs16_to_cs8(uint8_t* dest, uint8_t* src, size_t sample_cnt) {
+        const int16_t* __restrict s16 = (const int16_t*)src;
+        int8_t* __restrict d = (int8_t*)dest;
+        size_t vals = sample_cnt * 2;
+#ifdef __has_builtin
+        if (vals & 127)
+            __builtin_unreachable();
+#endif
+        for (size_t c = 0; c < vals; c++) {
+            d[c] = (int8_t)(s16[c] >> 8);
+        }
+        return true;
+    }

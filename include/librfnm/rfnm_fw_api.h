@@ -292,7 +292,7 @@ RFNM_PACKED_STRUCT(
 	uint32_t magic;
 	uint32_t adc_id;
 	uint32_t phytimer;
-	uint32_t dropped;
+	uint32_t fmt;	// RFNM_PACKET_FMT_*: payload encoding (was unused "dropped")
 	uint32_t adc_cc;
 	uint64_t usb_cc;
 	uint32_t elem_cnt;	// samples in buf (variable-size packets: latency-deadline partial flush)
@@ -305,7 +305,7 @@ RFNM_PACKED_STRUCT(
 	uint32_t magic;
 	uint32_t dac_id;
 	uint32_t phytimer;
-	uint32_t dropped;
+	uint32_t fmt;	// RFNM_PACKET_FMT_*: payload encoding (was unused "dropped")
 	uint32_t dac_cc;
 	uint64_t usb_cc;
 	// base bufs (256 samples each) present in this packet, 1..RFNM_TX_USB_BUF_MULTI;
@@ -324,6 +324,30 @@ RFNM_PACKED_STRUCT(
 #define RFNM_USB_RX_PACKET_HEAD_SIZE (RFNM_USB_RX_PACKET_SIZE - (LA_RX_BASE_BUFSIZE_12 * RFNM_RX_USB_BUF_MULTI))
 #define RFNM_USB_RX_PACKET_DATA_SIZE (RFNM_USB_RX_PACKET_SIZE - RFNM_USB_RX_PACKET_HEAD_SIZE)
 #define RFNM_USB_RX_PACKET_ELEM_CNT (RFNM_USB_RX_PACKET_DATA_SIZE / 3)
+
+// payload encoding carried in the packet head fmt field. USB/TCP always use
+// PACKED12 (wire bandwidth); the local transport uses CS16 so neither side ever
+// packs or unpacks on the same SoC. Consumers branch per packet.
+#define RFNM_PACKET_FMT_PACKED12 0
+#define RFNM_PACKET_FMT_CS16 1
+
+// local transport ring elements: identical heads, payload grown so a CS16 packet
+// carries the same elem/multi capacity as a PACKED12 wire packet. The packed structs
+// keep buf and ext contiguous; address payloads via RFNM_USB_*_PACKET_HEAD_SIZE.
+RFNM_PACKED_STRUCT(
+	struct rfnm_local_rx_pkt {
+	struct rfnm_rx_usb_buf p;
+	uint8_t ext[(LA_RX_BASE_BUFSIZE - LA_RX_BASE_BUFSIZE_12) * RFNM_RX_USB_BUF_MULTI];
+}
+);
+RFNM_PACKED_STRUCT(
+	struct rfnm_local_tx_pkt {
+	struct rfnm_tx_usb_buf p;
+	uint8_t ext[(LA_TX_BASE_BUFSIZE - LA_TX_BASE_BUFSIZE_12) * RFNM_TX_USB_BUF_MULTI];
+}
+);
+#define RFNM_LOCAL_RX_PACKET_SIZE (sizeof(struct rfnm_local_rx_pkt))
+#define RFNM_LOCAL_TX_PACKET_SIZE (sizeof(struct rfnm_local_tx_pkt))
 
 #define RFNM_SYSCTL_TRANSFER_SIZE 1152
 

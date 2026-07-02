@@ -494,8 +494,9 @@ static void rfnm_usb_tx_async_cb(struct libusb_transfer* t) {
 
 
 void device::threadfn(size_t thread_index) {
-    struct rfnm_rx_usb_buf* lrxbuf = new rfnm_rx_usb_buf();
-    struct rfnm_tx_usb_buf* ltxbuf = new rfnm_tx_usb_buf();
+    // sized for the local transport's grown cs16 packets; USB/TCP only use the prefix
+    struct rfnm_rx_usb_buf* lrxbuf = (struct rfnm_rx_usb_buf*)new uint8_t[RFNM_LOCAL_RX_PACKET_SIZE]();
+    struct rfnm_tx_usb_buf* ltxbuf = (struct rfnm_tx_usb_buf*)new uint8_t[RFNM_LOCAL_TX_PACKET_SIZE]();
     int transferred;
     auto& tpm = thread_data[thread_index];
     int r;
@@ -518,8 +519,8 @@ void device::threadfn(size_t thread_index) {
     if (s->transport_status.transport == TRANSPORT_TCP) {
         // CHANGED: Only use first 2 threads for TCP, shared connection
         if (thread_index >= 2) {
-            delete lrxbuf;
-            delete ltxbuf;
+            delete[] (uint8_t*)lrxbuf;
+            delete[] (uint8_t*)ltxbuf;
             return;
         }
 
@@ -564,8 +565,8 @@ void device::threadfn(size_t thread_index) {
             }
             catch (std::exception& e) {
                 spdlog::error("Thread {} failed to connect to TCP data: {}", thread_index, e.what());
-                delete lrxbuf;
-                delete ltxbuf;
+                delete[] (uint8_t*)lrxbuf;
+                delete[] (uint8_t*)ltxbuf;
                 return;
             }
         }
@@ -575,8 +576,8 @@ void device::threadfn(size_t thread_index) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
             if (!tcp_data_connected) {
-                delete lrxbuf;
-                delete ltxbuf;
+                delete[] (uint8_t*)lrxbuf;
+                delete[] (uint8_t*)ltxbuf;
                 return;
             }
         }
@@ -788,7 +789,20 @@ void device::threadfn(size_t thread_index) {
                 goto skip_rx;
             }
 
-            if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS8) {
+            if (lrxbuf->fmt == RFNM_PACKET_FMT_CS16) {
+                // local transport: the kernel already unpacked 12->16, only the output
+                // format conversion remains (single unpack total on this SoC)
+                if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS8) {
+                    convert_cs16_to_cs8(buf->buf, (uint8_t*)lrxbuf->buf, lrxbuf->elem_cnt);
+                }
+                else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS16) {
+                    convert_cs16_to_cs16(buf->buf, (uint8_t*)lrxbuf->buf, lrxbuf->elem_cnt);
+                }
+                else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CF32) {
+                    convert_cs16_to_cf32(buf->buf, (uint8_t*)lrxbuf->buf, lrxbuf->elem_cnt);
+                }
+            }
+            else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS8) {
                 unpack_12_to_cs8(buf->buf, (uint8_t*)lrxbuf->buf, lrxbuf->elem_cnt);
             }
             else if (s->transport_status.rx_stream_format == STREAM_FORMAT_CS16) {
@@ -884,7 +898,15 @@ void device::threadfn(size_t thread_index) {
             uint32_t tx_elems = buf->elem_cnt ? buf->elem_cnt : RFNM_USB_TX_PACKET_ELEM_CNT;
             uint32_t tx_multi = (tx_elems * 3) / LA_TX_BASE_BUFSIZE_12;
             uint32_t tx_wire_len = RFNM_USB_TX_PACKET_HEAD_SIZE + tx_multi * LA_TX_BASE_BUFSIZE_12;
-            pack_cs16_to_12((uint8_t*)ltxbuf->buf, buf->buf, tx_elems);
+            if (s->transport_status.transport == TRANSPORT_LOCAL) {
+                // same SoC: no reason to pack 16->12 only for the kernel to unpack again
+                memcpy((uint8_t*)ltxbuf + RFNM_USB_TX_PACKET_HEAD_SIZE, buf->buf, (size_t)tx_elems * 4);
+                ltxbuf->fmt = RFNM_PACKET_FMT_CS16;
+                tx_wire_len = RFNM_USB_TX_PACKET_HEAD_SIZE + tx_multi * LA_TX_BASE_BUFSIZE;
+            } else {
+                pack_cs16_to_12((uint8_t*)ltxbuf->buf, buf->buf, tx_elems);
+                ltxbuf->fmt = RFNM_PACKET_FMT_PACKED12;
+            }
             ltxbuf->dac_cc = buf->dac_cc;
             ltxbuf->dac_id = buf->dac_id;
             ltxbuf->usb_cc = buf->usb_cc;
@@ -1168,11 +1190,11 @@ void device::threadfn(size_t thread_index) {
 
     //spdlog::error("exiting thread");
     if (lrxbuf) {
-        delete lrxbuf;
+        delete[] (uint8_t*)lrxbuf;
     }
     //spdlog::error("past delete");
     if (ltxbuf) {
-        delete ltxbuf;
+        delete[] (uint8_t*)ltxbuf;
     }
     //spdlog::error("past second delete");
 
