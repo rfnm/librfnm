@@ -930,15 +930,25 @@ void device::threadfn(size_t thread_index) {
                     if (az.state[q] == 0) { slot = q; break; }
                 }
                 if (slot < 0) {
-                    // pipeline full: give completions a moment, put the buf back in order
+                    // pipeline full: wait for a completion, reap it, retry the SAME buf
+                    // immediately - bouncing through the dev-status path per packet gated
+                    // throughput at the worker pass rate (~1k pkt/s; 122.88M needs 6k).
                     {
                         std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
                         tx_s.in.push(buf);
                         reorder_tx_queue_nolock(tx_s);
                     }
-                    struct timeval tv_wait = {0, 1000};
+                    struct timeval tv_wait = {0, 2000};
                     libusb_handle_events_timeout(nullptr, &tv_wait);
-                    goto read_dev_status;
+                    for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                        if (az.state[q] == 2) {
+                            std::lock_guard<std::mutex> lockGuard(tx_s.out_mutex);
+                            tx_s.out.push(az.app[q]);
+                            tx_s.cv.notify_one();
+                            az.state[q] = 0;
+                        }
+                    }
+                    continue;
                 }
                 struct rfnm_tx_usb_buf* axbuf = (struct rfnm_tx_usb_buf*)az.xbuf[slot];
                 memcpy(axbuf, ltxbuf, RFNM_USB_TX_PACKET_HEAD_SIZE);
@@ -956,7 +966,23 @@ void device::threadfn(size_t thread_index) {
                     reorder_tx_queue_nolock(tx_s);
                     goto read_dev_status;
                 }
-                // submitted in order; completion recycles the app buf on a later pass
+                // submitted in order; completion recycles the app buf on a later pass.
+                // Keep draining the input queue while URB slots remain - one submit per
+                // worker pass caps throughput at the pass rate (~1-3k pkt/s, measured
+                // 21.7 MSPS at 122.88M); the wire needs 6k pkt/s of full packets.
+                {
+                    std::unique_lock lk(tx_s.in_mutex);
+                    if (!tx_s.in.empty()) {
+                        bool have_free = false;
+                        for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                            if (az.state[q] == 0) { have_free = true; break; }
+                        }
+                        if (have_free) {
+                            lk.unlock();
+                            continue;
+                        }
+                    }
+                }
                 goto read_dev_status;
 
                 r = libusb_bulk_transfer(lusb_handle, (((tpm.ep_id % 4) + 1) | LIBUSB_ENDPOINT_OUT),
