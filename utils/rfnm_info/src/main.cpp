@@ -22,7 +22,7 @@ void dumpHwInfo(const rfnm_dev_hwinfo_bit& info, bool daughterboard, int offset 
 
 int main() {
     // List all available devices
-    std::vector<rfnm_dev_hwinfo> list;
+    std::vector<rfnm::dev_info> list;
     try {
         list = rfnm::device::find(rfnm::transport::TRANSPORT_FIND);
     }
@@ -38,11 +38,27 @@ int main() {
     }
 
     // Display all of them
-    for (const auto& info : list) {
+    for (const auto& dev : list) {
+        const rfnm_dev_hwinfo& info = dev.hwinfo;
         try {
             // Show device name and serial number
             printf("RFNM %s [Serial=%s]\n", info.motherboard.user_readable_name, info.motherboard.serial_number);
             printf("----------------------------------\n");
+
+            // Show the transport it was discovered on and the address to open it
+            switch (dev.transport) {
+            case rfnm::TRANSPORT_USB:
+                printf("* Transport:        USB\n");
+                break;
+            case rfnm::TRANSPORT_TCP:
+                printf("* Transport:        Network [Address=%s]\n", dev.address.c_str());
+                break;
+            case rfnm::TRANSPORT_LOCAL:
+                printf("* Transport:        Local\n");
+                break;
+            default:
+                break;
+            }
 
             // Show motherboard information
             printf("* Protocol Version: %d\n", info.protocol_version);

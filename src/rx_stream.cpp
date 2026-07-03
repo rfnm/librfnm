@@ -4,7 +4,9 @@
 using namespace rfnm;
 
 MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
-    for (uint32_t channel = 0; channel < dev.get_rx_channel_count(); channel++) {
+    // iterate the full channel space: get_rx_channel_count() counts available channels,
+    // which is not an index bound when availability is sparse
+    for (uint32_t channel = 0; channel < MAX_RX_CHANNELS; channel++) {
         if (!(ch_ids & channel_flags[channel])) continue;
         channels.push_back(channel);
     }

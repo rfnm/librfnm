@@ -241,130 +241,90 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
 exit_local:
     if (transport == TRANSPORT_TCP || transport == TRANSPORT_FIND) {
         try {
-
-            asio::io_context io_context;
-
-            std::string remote_addr;
-            //spdlog::info("Detected broadcast address: {}", remote_addr);
-
-            if (address.length()) {
-                remote_addr = address;
+            // Reuse discovery to resolve the device address: it probes every host interface
+            // and skips malformed or protocol-mismatched replies instead of failing on the
+            // first bad one
+            std::vector<struct dev_info> remote = find(TRANSPORT_TCP, address);
+            if (remote.empty()) {
+                goto exit_eth;
             }
-            else {
-                remote_addr = get_broadcast_address();
-                if (remote_addr.empty()) {
-                    //spdlog::error("Failed to detect broadcast address.");
-                    goto exit_eth;
+            rfnm_eth_transport_ip_addr = remote[0].address;
+
+            // Connect to the TCP control port
+            rfnm_ctrl_ioctx_tcp = std::make_unique<asio::io_context>();
+            rfnm_ctrl_socket_tcp = std::make_unique<asio::ip::tcp::socket>(*rfnm_ctrl_ioctx_tcp);
+            asio::ip::tcp::endpoint tcp_ctrl_ep(asio::ip::make_address(rfnm_eth_transport_ip_addr), RFNM_TCP_CTRL_PORT);
+            rfnm_ctrl_socket_tcp->connect(tcp_ctrl_ep);
+            rfnm_ctrl_socket_tcp->set_option(asio::ip::tcp::no_delay(true));
+            spdlog::info("Connected TCP control to {}:{}", rfnm_eth_transport_ip_addr, RFNM_TCP_CTRL_PORT);
+
+            s->transport_status.theoretical_mbps = 1000;
+            s->transport_status.transport = TRANSPORT_TCP;
+            THREAD_COUNT = 2;
+
+            uint8_t dummy_buf[10];
+            if (control_transfer(RFNM_GET_SM_RESET, 1, dummy_buf, 50) != RFNM_API_OK) {
+                spdlog::error("Failed to reset state machine");
+                goto exit_eth;
+            }
+            spdlog::info("State machine reset via TCP control channel");
+            reset_device_state();
+
+            if (get(REQ_ALL)) {
+                goto exit_eth;
+            }
+
+            // Connect the data socket after the state machine reset (which invalidates data
+            // clients), and here rather than in a worker thread: a worker blocked in connect()
+            // can't observe a shutdown request, which turned a device close during a stalled
+            // connect into a use-after-free
+            tcp_data_io_context = std::make_shared<asio::io_context>();
+            tcp_data_socket = std::make_shared<asio::ip::tcp::socket>(*tcp_data_io_context);
+            asio::ip::tcp::endpoint tcp_data_ep(asio::ip::make_address(rfnm_eth_transport_ip_addr), RFNM_TCP_DATA_PORT);
+            tcp_data_socket->connect(tcp_data_ep);
+            tcp_data_socket->set_option(asio::ip::tcp::no_delay(true));
+
+            // Deliberately NOT setting SO_RCVBUF/SO_SNDBUF: an explicit value is clamped to
+            // net.core.rmem_max (~208 KB on stock hosts) and locks the buffer there, pinning
+            // the TCP receive window at ~256 KB - which capped streaming at ~1.6 Gbps (sender
+            // 97.7% rwnd-limited). Kernel autotuning is exempt from that clamp and grows to
+            // tcp_rmem max.
+
+#if defined(__linux__) || defined(__APPLE__)
+            // surface the negotiated MSS: jumbo frames decide whether the data path tops out
+            // near ~77 or ~90 Msps on a 2.5G link, and a silently small MSS is otherwise
+            // invisible to the user
+            {
+                int mss = 0;
+                socklen_t mss_len = sizeof(mss);
+                if (getsockopt(tcp_data_socket->native_handle(), IPPROTO_TCP, TCP_MAXSEG, &mss, &mss_len) == 0 && mss > 0) {
+                    if (mss < 2000) {
+                        spdlog::info("data path MSS {} (jumbo frames inactive): TCP streaming caps near ~77 Msps; "
+                                     "set the host NIC MTU to 8000 on a jumbo-capable path for rates up to ~90 Msps", mss);
+                    } else {
+                        spdlog::info("data path MSS {} (jumbo frames active)", mss);
+                    }
                 }
-            }
-
-            asio::ip::udp::endpoint remote_endpoint(asio::ip::make_address(remote_addr), RFNM_UDP_CTRL_PORT);
-
-            asio::ip::udp::socket socket(io_context);
-            socket.open(asio::ip::udp::v4());
-
-#ifdef _WIN32
-            DWORD timeout = 150; // 10 ms for Windows.
-            if (setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-                reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0)
-            {
-                spdlog::error("Failed to set receive timeout on Windows");
-            }
-#else
-            struct timeval tv;
-            tv.tv_sec = 0;
-            tv.tv_usec = 150*1000; // 10,000 microseconds = 10 ms.
-            if (setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-                &tv, sizeof(tv)) < 0)
-            {
-                spdlog::error("Failed to set receive timeout on Linux/macOS");
             }
 #endif
 
-            if (!address.length()) {
-                asio::socket_base::broadcast broadcast_option(true);
-                socket.set_option(broadcast_option);
+            tcp_data_connected = true;
+
+            for (int8_t i = 0; i < THREAD_COUNT; i++) {
+                thread_data[i].ep_id = i + 1;
+                thread_data[i].rx_active = 0;
+                thread_data[i].tx_active = 0;
+                thread_data[i].shutdown_req = 0;
             }
 
-            uint8_t message[1];
-            message[0] = ((int)RFNM_GET_DEV_HWINFO) & 0xff;
-
-            socket.send_to(asio::buffer(message), remote_endpoint);
-            //spdlog::info("Sent RFNM_GET_DEV_HWINFO request.");
-
-            //auto local_ep = socket.local_endpoint();
-            //spdlog::info("Local ephemeral port assigned: {}", local_ep.port());
-
-            char reply[1152];
-            asio::ip::udp::endpoint sender_endpoint;
-            size_t reply_length = socket.receive_from(asio::buffer(reply), sender_endpoint);
-
-            rfnm_dev_hwinfo r_hwinfo;
-            if (reply_length == sizeof(rfnm_dev_hwinfo) + 1) {
-                if (reply[0] != (RFNM_GET_DEV_HWINFO & 0xff)) {
-                    spdlog::error("UDP control transfer conflict got {} should have been RFNM_GET_DEV_HWINFO", (uint8_t)reply[0]);
-                    goto exit_eth;
-                }
-                memcpy(&r_hwinfo, &reply[1], sizeof(rfnm_dev_hwinfo));
-                if (r_hwinfo.protocol_version != RFNM_PROTOCOL_VERSION) {
-                    uint32_t mv = r_hwinfo.protocol_version;
-                    spdlog::error("Protocol version mismatch: received {}, expected {}", mv, RFNM_PROTOCOL_VERSION);
-                    goto exit_eth;
-                }
-
-                // CHANGED: Store the discovered IP address for TCP connections
-                rfnm_eth_transport_ip_addr = sender_endpoint.address().to_string();
-
-                // CHANGED: Create TCP sockets instead of UDP for control and data
-                rfnm_ctrl_ioctx_tcp = std::make_unique<asio::io_context>();
-                rfnm_ctrl_socket_tcp = std::make_unique<asio::ip::tcp::socket>(*rfnm_ctrl_ioctx_tcp);
-
-                // Connect to TCP control port
-                asio::ip::tcp::endpoint tcp_ctrl_ep(asio::ip::make_address(rfnm_eth_transport_ip_addr), RFNM_TCP_CTRL_PORT);
-                rfnm_ctrl_socket_tcp->connect(tcp_ctrl_ep);
-
-                spdlog::info("Connected TCP control to {}:{}", rfnm_eth_transport_ip_addr, RFNM_TCP_CTRL_PORT);
-
-                // Set TCP nodelay for control socket
-                rfnm_ctrl_socket_tcp->set_option(asio::ip::tcp::no_delay(true));
-
-                s->transport_status.theoretical_mbps = 1000;
-                s->transport_status.transport = TRANSPORT_TCP;
-                THREAD_COUNT = 2;
-
-               
-                uint8_t dummy_buf[10];
-                if (control_transfer(RFNM_GET_SM_RESET, 1, dummy_buf, 50) != RFNM_API_OK) {
-                    spdlog::error("Failed to reset state machine");
-                    goto exit_eth;
-                }
-                spdlog::info("State machine reset via TCP control channel");
-                reset_device_state();
-                
-
-                if (get(REQ_ALL)) {
-                    goto exit_eth;
-                }
-
-                for (int8_t i = 0; i < THREAD_COUNT; i++) {
-                    thread_data[i].ep_id = i + 1;
-                    thread_data[i].rx_active = 0;
-                    thread_data[i].tx_active = 0;
-                    thread_data[i].shutdown_req = 0;
-                }
-
-                for (int i = 0; i < THREAD_COUNT; i++) {
-                    thread_c[i] = std::thread(&device::threadfn, this, i);
-                }
-
-                return;
+            for (int i = 0; i < THREAD_COUNT; i++) {
+                thread_c[i] = std::thread(&device::threadfn, this, i);
             }
-            else {
-                spdlog::error("Reply too short ({} bytes)", reply_length);
-            }
+
+            return;
         }
         catch (std::exception& e) {
-            spdlog::error("UDP problem: {}", e.what());
+            spdlog::error("TCP connection failed: {}", e.what());
         }
     }
 exit_eth:
@@ -372,7 +332,6 @@ exit_eth:
 }
 
 MSDLL device::~device() {
-    printf("exiting step 1\n");
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].rx_active = 0;
@@ -381,8 +340,14 @@ MSDLL device::~device() {
         thread_data[i].cv.notify_all();
     }
 
+    // A worker blocked in a data socket read can't observe shutdown_req, and close()
+    // alone doesn't interrupt an in-progress blocking recv - shutdown() does. Checking
+    // tcp_data_connected also guarantees the connecting thread finished the assignment.
+    if (tcp_data_connected && tcp_data_socket) {
+        asio::error_code ec;
+        tcp_data_socket->shutdown(asio::ip::tcp::socket::shutdown_both, ec);
+    }
 
-    printf("exiting step 2\n");
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         if (thread_c[i].joinable()) {
             // Use async to implement timeout
@@ -391,21 +356,16 @@ MSDLL device::~device() {
                 });
 
             if (future.wait_for(std::chrono::milliseconds(500)) == std::future_status::timeout) {
-                fprintf(stderr, "thread %d timed out, detaching\n", i);
+                spdlog::warn("worker thread {} timed out, detaching", i);
                 thread_c[i].detach();
-            }
-            else {
-                fprintf(stderr, "thread %d joined successfully\n", i);
             }
         }
     }
-    printf("exiting step 3\n");
 
     // Clean up buffers
     if (rx_buffers_allocated) {
         rx_flush(0);
     }
-    printf("exiting step 4\n");
 
     if (s->transport_status.transport == TRANSPORT_USB) {
 
@@ -423,9 +383,15 @@ MSDLL device::~device() {
         delete usb_handle;
         libusb_exit(NULL);
     }
-    printf("exiting step 5\n");
 
     if (s->transport_status.transport == TRANSPORT_TCP) {
+        tcp_data_connected = false;
+        if (tcp_data_socket) {
+            asio::error_code ec;
+            tcp_data_socket->close(ec);
+            tcp_data_socket.reset();
+            tcp_data_io_context.reset();
+        }
         if (rfnm_ctrl_ioctx_tcp)
             rfnm_ctrl_ioctx_tcp->stop();
         if (rfnm_ctrl_socket_tcp && rfnm_ctrl_socket_tcp->is_open()) {
@@ -511,75 +477,12 @@ void device::threadfn(size_t thread_index) {
     }
 #endif
 
-    // CHANGED: TCP socket for data instead of UDP
-    asio::ip::tcp::endpoint rfnm_data_ep_tcp;
-    asio::io_context rfnm_data_ioctx_tcp;
-    asio::ip::tcp::socket rfnm_data_socket_tcp(rfnm_data_ioctx_tcp);
-
     if (s->transport_status.transport == TRANSPORT_TCP) {
-        // CHANGED: Only use first 2 threads for TCP, shared connection
+        // Only two threads for TCP; the shared data socket was connected by the constructor
         if (thread_index >= 2) {
             delete[] (uint8_t*)lrxbuf;
             delete[] (uint8_t*)ltxbuf;
             return;
-        }
-
-        if (thread_index == 0) {
-            // CHANGED: Thread 0 creates shared connection
-            tcp_data_io_context = std::make_shared<asio::io_context>();
-            tcp_data_socket = std::make_shared<asio::ip::tcp::socket>(*tcp_data_io_context);
-
-            rfnm_data_ep_tcp = asio::ip::tcp::endpoint(asio::ip::make_address(rfnm_eth_transport_ip_addr), RFNM_TCP_DATA_PORT);
-
-            // Connect to TCP data port
-            try {
-                tcp_data_socket->connect(rfnm_data_ep_tcp);
-                tcp_data_socket->set_option(asio::ip::tcp::no_delay(true));
-
-                // Deliberately NOT setting SO_RCVBUF/SO_SNDBUF: an explicit value is
-                // clamped to net.core.rmem_max (~208 KB on stock hosts) and locks the
-                // buffer there, pinning the TCP receive window at ~256 KB - which
-                // capped streaming at ~1.6 Gbps (sender 97.7% rwnd-limited). Kernel
-                // autotuning is exempt from that clamp and grows to tcp_rmem max.
-
-#if defined(__linux__) || defined(__APPLE__)
-                // surface the negotiated MSS: jumbo frames decide whether the data
-                // path tops out near ~77 or ~90 Msps on a 2.5G link, and a silently
-                // small MSS is otherwise invisible to the user
-                {
-                    int mss = 0;
-                    socklen_t mss_len = sizeof(mss);
-                    if (getsockopt(tcp_data_socket->native_handle(), IPPROTO_TCP, TCP_MAXSEG, &mss, &mss_len) == 0 && mss > 0) {
-                        if (mss < 2000) {
-                            spdlog::info("data path MSS {} (jumbo frames inactive): TCP streaming caps near ~77 Msps; "
-                                         "set the host NIC MTU to 8000 on a jumbo-capable path for rates up to ~90 Msps", mss);
-                        } else {
-                            spdlog::info("data path MSS {} (jumbo frames active)", mss);
-                        }
-                    }
-                }
-#endif
-
-                tcp_data_connected = true;
-                spdlog::info("Thread {} connected to TCP data port", thread_index);
-            }
-            catch (std::exception& e) {
-                spdlog::error("Thread {} failed to connect to TCP data: {}", thread_index, e.what());
-                delete[] (uint8_t*)lrxbuf;
-                delete[] (uint8_t*)ltxbuf;
-                return;
-            }
-        }
-        else {
-            // CHANGED: Thread 1 waits for connection
-            while (!tcp_data_connected && !tpm.shutdown_req) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
-            if (!tcp_data_connected) {
-                delete[] (uint8_t*)lrxbuf;
-                delete[] (uint8_t*)ltxbuf;
-                return;
-            }
         }
     }
 
@@ -1198,19 +1101,8 @@ void device::threadfn(size_t thread_index) {
     }
     //spdlog::error("past second delete");
 
-    if (s->transport_status.transport == TRANSPORT_TCP) {
-        // CHANGED: Cleanup shared connection on thread 0
-        if (thread_index == 0 && tcp_data_socket) {
-            tcp_data_connected = false;
-            try {
-                tcp_data_socket->close();
-            }
-            catch (...) {}
-            tcp_data_socket.reset();
-            tcp_data_io_context.reset();
-        }
-    }
-
+    // TCP data socket teardown happens in the destructor after all threads have
+    // joined, since the connection is shared by the RX and TX worker threads
 
     if (s->transport_status.transport == TRANSPORT_LOCAL) {
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
@@ -1222,16 +1114,21 @@ void device::threadfn(size_t thread_index) {
 
 
 
-MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport, std::string address, int bind) {
-    //if (transport == TRANSPORT_TCP) {
-    //    spdlog::error("Transport not supported");
-    //    return {};
-    //}
+// A device can enumerate at most once per transport
+static bool sn_already_found(const std::vector<struct dev_info>& found, enum transport transport, const uint8_t* sn) {
+    for (auto& dev : found) {
+        if (dev.transport == transport &&
+            std::memcmp(dev.hwinfo.motherboard.serial_number, sn, sizeof(dev.hwinfo.motherboard.serial_number)) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
 
-    int cnt = 0;
+MSDLL std::vector<struct dev_info> device::find(enum transport transport, std::string address) {
     int dev_cnt = 0;
     int r;
-    std::vector<struct rfnm_dev_hwinfo> found = {};
+    std::vector<struct dev_info> found = {};
 
     if (transport == TRANSPORT_USB || transport == TRANSPORT_FIND) {
         libusb_device** devs = NULL;
@@ -1271,19 +1168,19 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
                 continue;
             }
 
-            if (address.length()) {
-                uint8_t sn[9];
-                if (libusb_get_string_descriptor_ascii(thandle, desc.iSerialNumber, sn, 9) >= 0) {
-                    sn[8] = '\0';
-                    if (strcmp((const char*)sn, address.c_str())) {
-                        spdlog::info("This serial {} doesn't match the requested {}", (const char*)sn, address);
-                        goto next;
-                    }
-                }
-                else {
-                    spdlog::error("Couldn't read serial descr");
-                    goto next;
-                }
+            uint8_t sn[9];
+            if (libusb_get_string_descriptor_ascii(thandle, desc.iSerialNumber, sn, 9) >= 0) {
+                sn[8] = '\0';
+            }
+            else {
+                // still list the device: an empty address opens the first available unit
+                spdlog::error("Couldn't read serial descr");
+                sn[0] = '\0';
+            }
+
+            if (address.length() && strcmp((const char*)sn, address.c_str())) {
+                spdlog::info("This serial {} doesn't match the requested {}", (const char*)sn, address);
+                goto next;
             }
 
             if (libusb_get_device_speed(libusb_get_device(thandle)) < LIBUSB_SPEED_SUPER) {
@@ -1313,18 +1210,12 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
                 goto next;
             }
 
-            // Ensure we only add each device to the found list once as devices may be available via more than one transport type.
-            for (auto& dev : found) {
-                if (std::memcmp(dev.motherboard.serial_number,
-                    r_hwinfo.motherboard.serial_number,
-                    sizeof(dev.motherboard.serial_number)) == 0) {
-                    spdlog::info("Skip USB device (duplicate SN): {}", (char*)r_hwinfo.motherboard.serial_number);
-                    goto next;
-                }
-
+            if (sn_already_found(found, TRANSPORT_USB, r_hwinfo.motherboard.serial_number)) {
+                spdlog::info("Skip USB device (duplicate SN): {}", (char*)r_hwinfo.motherboard.serial_number);
+                goto next;
             }
             spdlog::info("Add USB device: {}", (char*)r_hwinfo.motherboard.serial_number);
-            found.push_back(r_hwinfo);
+            found.push_back({ TRANSPORT_USB, std::string((const char*)sn), r_hwinfo });
 
         next:
             libusb_release_interface(thandle, 0);
@@ -1362,17 +1253,12 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
             goto exit_close_local;
         }
 
-        // Ensure we only add each device to the found list once as devices may be available via more than one transport type.
-        for (auto& dev : found) {
-            if (std::memcmp(dev.motherboard.serial_number,
-                r_hwinfo.motherboard.serial_number,
-                sizeof(dev.motherboard.serial_number)) == 0) {
-                spdlog::info("Skip local device (duplicate SN): {}", (char*)r_hwinfo.motherboard.serial_number);
-                goto exit_close_local;
-            }
+        if (sn_already_found(found, TRANSPORT_LOCAL, r_hwinfo.motherboard.serial_number)) {
+            spdlog::info("Skip local device (duplicate SN): {}", (char*)r_hwinfo.motherboard.serial_number);
+            goto exit_close_local;
         }
         spdlog::info("Add local device: {}", (char*)r_hwinfo.motherboard.serial_number);
-        found.push_back(r_hwinfo);
+        found.push_back({ TRANSPORT_LOCAL, "", r_hwinfo });
 
     exit_close_local:
         close(fd);
@@ -1381,110 +1267,95 @@ MSDLL std::vector<struct rfnm_dev_hwinfo> device::find(enum transport transport,
 
 exit_local:
     if (transport == TRANSPORT_TCP || transport == TRANSPORT_FIND) {
-
         try {
             asio::io_context io_context;
 
-            std::string remote_addr;
-            //spdlog::info("Detected broadcast address: {}", remote_addr);
-
+            std::vector<std::string> probe_addrs;
             if (address.length()) {
-                remote_addr = address;
+                probe_addrs.push_back(address);
             }
             else {
-                remote_addr = get_broadcast_address();
-                if (remote_addr.empty()) {
-                    //spdlog::error("Failed to detect broadcast address.");
-                    goto exit_eth;
-                }
+                probe_addrs = get_broadcast_addresses();
             }
 
-            asio::ip::udp::endpoint remote_endpoint(asio::ip::make_address(remote_addr), RFNM_UDP_CTRL_PORT);
+            if (!probe_addrs.empty()) {
+                asio::ip::udp::socket socket(io_context);
+                socket.open(asio::ip::udp::v4());
+                socket.non_blocking(true);
 
-            asio::ip::udp::socket socket(io_context);
-            socket.open(asio::ip::udp::v4());
-
-#ifdef _WIN32
-            DWORD timeout = 150; // 10 ms for Windows.
-            if (setsockopt(socket.native_handle(), SOL_SOCKET, SO_RCVTIMEO,
-                reinterpret_cast<const char*>(&timeout), sizeof(timeout)) < 0)
-            {
-                spdlog::error("Failed to set receive timeout on Windows");
-            }
-#else
-            // On linux, the asio does not respect the SO_RCVTIMEO option
-            // As a work-around we set the socket to non-blocking mode
-            // and use a sleep to allow the socket to receive the reply.
-            socket.non_blocking(true);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-#endif
-
-            if (!address.length()) {
-                asio::socket_base::broadcast broadcast_option(true);
-                socket.set_option(broadcast_option);
-            }
-
-            uint8_t message[1];
-            message[0] = ((int)RFNM_GET_DEV_HWINFO) & 0xff;
-
-            socket.send_to(asio::buffer(message), remote_endpoint);
-            //spdlog::info("Sent RFNM_GET_DEV_HWINFO request.");
-
-            //auto local_ep = socket.local_endpoint();
-            //spdlog::info("Local ephemeral port assigned: {}", local_ep.port());
-
-            char reply[1152];
-            asio::ip::udp::endpoint sender_endpoint;
-            size_t reply_length = socket.receive_from(asio::buffer(reply), sender_endpoint);
-            //spdlog::info("Received {} bytes back from {}:{}", reply_length, sender_endpoint.address().to_string(), sender_endpoint.port());
-
-            rfnm_dev_hwinfo r_hwinfo;
-            if (reply_length == sizeof(rfnm_dev_hwinfo) + 1) {
-                if (reply[0] != (RFNM_GET_DEV_HWINFO & 0xff)) {
-                    spdlog::error("UDP control transfer conflict got {} should have been RFNM_GET_DEV_HWINFO", (uint8_t)reply[0]);
-                    goto exit_eth;
-                }
-                memcpy(&r_hwinfo, &reply[1], sizeof(rfnm_dev_hwinfo));
-                if (r_hwinfo.protocol_version != RFNM_PROTOCOL_VERSION) {
-                    uint32_t mv = r_hwinfo.protocol_version;
-                    spdlog::error("Protocol version mismatch: received {}, expected {}", mv, RFNM_PROTOCOL_VERSION);
-                    goto exit_eth;
+                if (!address.length()) {
+                    asio::socket_base::broadcast broadcast_option(true);
+                    socket.set_option(broadcast_option);
                 }
 
-                // Ensure we only add each device to the found list once as devices may be available via more than one transport type.
-                for (auto& dev : found) {
-                    if (std::memcmp(dev.motherboard.serial_number,
-                        r_hwinfo.motherboard.serial_number,
-                        sizeof(dev.motherboard.serial_number)) == 0) {
-                        spdlog::info("Skip Network device (duplicate SN): {}", (char*)r_hwinfo.motherboard.serial_number);
-                        goto exit_eth;
+                uint8_t message[1];
+                message[0] = ((int)RFNM_GET_DEV_HWINFO) & 0xff;
+
+                for (auto& probe_addr : probe_addrs) {
+                    asio::ip::udp::endpoint remote_endpoint(asio::ip::make_address(probe_addr), RFNM_UDP_CTRL_PORT);
+                    asio::error_code ec;
+                    socket.send_to(asio::buffer(message), remote_endpoint, 0, ec);
+                    if (ec) {
+                        // one unroutable interface must not abort discovery on the others
+                        spdlog::info("Discovery probe to {} failed: {}", probe_addr, ec.message());
                     }
                 }
-                spdlog::info("Add Network device: {}", (char*)r_hwinfo.motherboard.serial_number);
 
-                found.push_back(r_hwinfo);
-            }
-            else {
-                spdlog::error("Reply too short ({} bytes)", reply_length);
+                // A broadcast can be answered by any number of devices, so keep collecting
+                // replies until the discovery window closes
+                char reply[1152];
+                auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+                while (std::chrono::steady_clock::now() < deadline) {
+                    asio::ip::udp::endpoint sender_endpoint;
+                    asio::error_code ec;
+                    size_t reply_length = socket.receive_from(asio::buffer(reply), sender_endpoint, 0, ec);
+
+                    if (ec == asio::error::would_block || ec == asio::error::try_again) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        continue;
+                    }
+                    if (ec) {
+                        spdlog::error("UDP receive failed: {}", ec.message());
+                        break;
+                    }
+
+                    if (reply_length != sizeof(rfnm_dev_hwinfo) + 1) {
+                        spdlog::error("Reply too short ({} bytes)", reply_length);
+                        continue;
+                    }
+                    if (reply[0] != (RFNM_GET_DEV_HWINFO & 0xff)) {
+                        spdlog::error("UDP control transfer conflict got {} should have been RFNM_GET_DEV_HWINFO", (uint8_t)reply[0]);
+                        continue;
+                    }
+
+                    rfnm_dev_hwinfo r_hwinfo;
+                    memcpy(&r_hwinfo, &reply[1], sizeof(rfnm_dev_hwinfo));
+                    if (r_hwinfo.protocol_version != RFNM_PROTOCOL_VERSION) {
+                        uint32_t mv = r_hwinfo.protocol_version;
+                        spdlog::error("Protocol version mismatch: received {}, expected {}", mv, RFNM_PROTOCOL_VERSION);
+                        continue;
+                    }
+
+                    if (sn_already_found(found, TRANSPORT_TCP, r_hwinfo.motherboard.serial_number)) {
+                        spdlog::info("Skip Network device (duplicate SN): {}", (char*)r_hwinfo.motherboard.serial_number);
+                        continue;
+                    }
+
+                    spdlog::info("Add Network device: {}", (char*)r_hwinfo.motherboard.serial_number);
+                    found.push_back({ TRANSPORT_TCP, sender_endpoint.address().to_string(), r_hwinfo });
+
+                    // A directed probe can only ever get one reply
+                    if (address.length()) {
+                        break;
+                    }
+                }
             }
         }
-#ifndef _WIN32
-        // catch  asio::error::would_block
-        catch (asio::system_error& e) {
-            // Don't log an error for "receive_from: Resource temporarily unavailable" as this is expected
-            if (e.code() != asio::error::would_block) {
-                spdlog::error("UDP control transfer failed: {}", e.what());
-            }
-            //else {
-            //    spdlog::info("UDP control transfer would block, no response received");
-            //}
-        }
-#endif
         catch (std::exception& e) {
             spdlog::error("UDP problem: {}", e.what());
         }
     }
-exit_eth:
+
     return found;
 }
 
@@ -2726,13 +2597,14 @@ std::string rfnm::compute_broadcast_address(const std::string& ip_str, const std
 }
 
 
-static std::string rfnm::get_broadcast_address() {
+static std::vector<std::string> rfnm::get_broadcast_addresses() {
+    std::vector<std::string> broadcasts;
 #ifdef _WIN32
     // Initialize Winsock (if not already done by your application).
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
         spdlog::error("WSAStartup failed");
-        return "";
+        return broadcasts;
     }
 
     // Allocate a buffer for adapter addresses.
@@ -2751,7 +2623,7 @@ static std::string rfnm::get_broadcast_address() {
     if (ret != NO_ERROR) {
         spdlog::error("GetAdaptersAddresses failed: {}", ret);
         WSACleanup();
-        return "";
+        return broadcasts;
     }
 
     // Iterate over the adapters.
@@ -2795,29 +2667,24 @@ static std::string rfnm::get_broadcast_address() {
                 std::string maskStr(maskBuf);
 
                 try {
-                    std::string broadcast = compute_broadcast_address(ipStr, maskStr);
                     //spdlog::info("Using adapter {}: IP = {}, Netmask = {}, Broadcast = {}", adapter->AdapterName, ipStr, maskStr, broadcast);
-                    WSACleanup();
-                    return broadcast;
+                    broadcasts.push_back(compute_broadcast_address(ipStr, maskStr));
                 }
                 catch (const std::exception& ex) {
                     spdlog::error("Error computing broadcast address: {}", ex.what());
-                    WSACleanup();
-                    return "";
                 }
             }
         }
     }
     WSACleanup();
-    return "";
+    return broadcasts;
 #else
     // Linux / macOS implementation using getifaddrs.
     struct ifaddrs* ifaddr = nullptr, * ifa = nullptr;
-    std::string broadcast_ip;
 
     if (getifaddrs(&ifaddr) == -1) {
         perror("getifaddrs");
-        return "";
+        return broadcasts;
     }
 
     for (ifa = ifaddr; ifa != nullptr; ifa = ifa->ifa_next) {
@@ -2852,9 +2719,8 @@ static std::string rfnm::get_broadcast_address() {
             std::string maskStr(maskBuf);
 
             try {
-                broadcast_ip = compute_broadcast_address(ipStr, maskStr);
                 //spdlog::info("Using interface {}: IP = {}, Netmask = {}, Broadcast = {}", ifa->ifa_name, ipStr, maskStr, broadcast_ip);
-                break;  // Use the first eligible interface.
+                broadcasts.push_back(compute_broadcast_address(ipStr, maskStr));
             }
             catch (const std::exception& ex) {
                 spdlog::error("Error computing broadcast address: {}", ex.what());
@@ -2863,7 +2729,7 @@ static std::string rfnm::get_broadcast_address() {
     }
 
     freeifaddrs(ifaddr);
-    return broadcast_ip;
+    return broadcasts;
 #endif
 }
 

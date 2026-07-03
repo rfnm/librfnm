@@ -43,6 +43,16 @@ namespace rfnm {
         int boost_pp_rx;
     };
 
+    // one discovered device, as returned by device::find(). Pass transport and address
+    // to the device constructor to open this exact unit. The address is the USB serial
+    // number for TRANSPORT_USB, the IPv4 address for TRANSPORT_TCP, and empty for
+    // TRANSPORT_LOCAL.
+    struct dev_info {
+        enum transport transport;
+        std::string address;
+        struct rfnm_dev_hwinfo hwinfo;
+    };
+
     struct status {
         struct transport_status transport_status;
 
@@ -140,7 +150,7 @@ namespace rfnm {
         MSDLL explicit device(enum transport transport, std::string address = "", enum debug_level dbg = DEBUG_NONE);
         MSDLL ~device();
 
-        MSDLL static std::vector<struct rfnm_dev_hwinfo> find(enum transport transport, std::string address = "", int bind = 0);
+        MSDLL static std::vector<struct dev_info> find(enum transport transport, std::string address = "");
 
         MSDLL rfnm_api_failcode get(enum req_type type);
 
@@ -271,11 +281,11 @@ namespace rfnm {
         // single TCP control socket and consume each other's responses.
         std::mutex rfnm_ctrl_socket_tcp_mutex;
 
-        inline static std::shared_ptr<asio::io_context> tcp_data_io_context;
-        inline static std::shared_ptr<asio::ip::tcp::socket> tcp_data_socket;
-        inline static std::mutex tcp_data_tx_mutex;
-        inline static std::mutex tcp_data_rx_mutex;
-        inline static std::atomic<bool> tcp_data_connected{ false };
+        std::shared_ptr<asio::io_context> tcp_data_io_context;
+        std::shared_ptr<asio::ip::tcp::socket> tcp_data_socket;
+        std::mutex tcp_data_tx_mutex;
+        std::mutex tcp_data_rx_mutex;
+        std::atomic<bool> tcp_data_connected{ false };
 
         std::atomic<bool> usb_shutdown{ false };
 
@@ -307,5 +317,5 @@ namespace rfnm {
     };
 
     std::string compute_broadcast_address(const std::string& ip_str, const std::string& mask_str);
-    static std::string get_broadcast_address();
+    static std::vector<std::string> get_broadcast_addresses();
 }
