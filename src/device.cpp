@@ -2220,9 +2220,9 @@ MSDLL int16_t device::suggested_lpf_bw(uint64_t samp_rate, const struct rfnm_dev
 
     // Effective ADC rate: trust the programmed chain state when it corresponds to this
     // rate; the state only updates when a stream (re)starts, so otherwise predict it
-    // with the same ladder the driver uses (rfnm_lalib.c): the DCS must land in its
-    // 100-200 MHz window at rate x 2^(k+1), preferring the deepest fit, and the ADC
-    // clock runs at half the DCS.
+    // with the same ladder the driver uses (rfnm_lalib.c): deepest VSPA decimation whose
+    // DCS (rate x 2^k) lands in the 100-200 MHz window, with the divide-by-2 bit as a
+    // last resort for the bottom octave.
     uint64_t adc_rate = 0;
     if (clock && clock->dcs_clk) {
         uint64_t adc = clock->dcs_clk >> clock->rx_dcs_div;
@@ -2232,10 +2232,10 @@ MSDLL int16_t device::suggested_lpf_bw(uint64_t samp_rate, const struct rfnm_dev
     }
     if (!adc_rate) {
         adc_rate = samp_rate;
-        for (int k = 8; k >= 0; k--) {
-            uint64_t dcs = samp_rate << (k + 1);
+        for (int k = 9; k >= 0; k--) {
+            uint64_t dcs = samp_rate << k;
             if (dcs >= 100000000 && dcs <= 200000000) {
-                adc_rate = samp_rate << k;
+                adc_rate = (k == 9) ? (dcs >> 1) : dcs;
                 break;
             }
         }
