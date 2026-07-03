@@ -175,6 +175,12 @@ namespace rfnm {
         MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t* bufsize = 0, uint8_t *bytes_per_ele = 0);
         MSDLL rfnm_api_failcode set_samp_rate(uint64_t freq, uint32_t timeout_us = 20000);
 
+        // Suggested RX RFIC LPF bandwidth in MHz (the unit set_rx_channel_rfic_lpf_bw takes)
+        // for a sample rate: filter to the wanted band, capped at the effective ADC rate.
+        // Pass the clock state from hwinfo when available - it is used when it corresponds
+        // to the requested rate, otherwise the rate ladder predicts the ADC rate.
+        MSDLL static int16_t suggested_lpf_bw(uint64_t samp_rate, const struct rfnm_dev_hwinfo_clock* clock = nullptr);
+
         // RX channel setters
         //MSDLL rfnm_api_failcode set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = false);
         MSDLL rfnm_api_failcode set_rx_channel_freq(uint32_t channel, int64_t freq, bool apply = false);

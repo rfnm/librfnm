@@ -2213,6 +2213,44 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
 }
 
 
+MSDLL int16_t device::suggested_lpf_bw(uint64_t samp_rate, const struct rfnm_dev_hwinfo_clock* clock) {
+    if (!samp_rate) {
+        return 0;
+    }
+
+    // Effective ADC rate: trust the programmed chain state when it corresponds to this
+    // rate; the state only updates when a stream (re)starts, so otherwise predict it
+    // with the same ladder the driver uses (rfnm_lalib.c): the DCS must land in its
+    // 100-200 MHz window at rate x 2^(k+1), preferring the deepest fit, and the ADC
+    // clock runs at half the DCS.
+    uint64_t adc_rate = 0;
+    if (clock && clock->dcs_clk) {
+        uint64_t adc = clock->dcs_clk >> clock->rx_dcs_div;
+        if ((adc >> clock->rx_decim_log2) == samp_rate) {
+            adc_rate = adc;
+        }
+    }
+    if (!adc_rate) {
+        adc_rate = samp_rate;
+        for (int k = 8; k >= 0; k--) {
+            uint64_t dcs = samp_rate << (k + 1);
+            if (dcs >= 100000000 && dcs <= 200000000) {
+                adc_rate = samp_rate << k;
+                break;
+            }
+        }
+    }
+
+    // Filter to the wanted band, not the ADC band: twice the sample rate keeps the band
+    // in the filter's flat region while attenuating the rest ahead of the ADC (the
+    // decimation stages have finite stopband and out-of-band energy eats ADC headroom).
+    // Never wider than the ADC band - at 1x decimation the output IS the ADC band and
+    // anything wider folds back into it - rounded down, and at least 2 MHz to stay
+    // above the RFIC's own low-band filter floor.
+    uint64_t bw = std::min(2 * samp_rate, adc_rate) / 1000000;
+    return (int16_t)std::clamp<uint64_t>(bw, 2, 160);
+}
+
 MSDLL rfnm_api_failcode device::set_samp_rate(uint64_t freq, uint32_t timeout_us) {
     struct rfnm_dev_set_samp_rate r_sr;
     r_sr.freq = freq;
