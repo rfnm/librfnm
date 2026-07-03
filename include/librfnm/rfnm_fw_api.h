@@ -134,7 +134,14 @@ RFNM_PACKED_STRUCT(
 	uint64_t samp_rate_min;
 	uint64_t samp_rate_max;
 	uint32_t samp_rate_step;
-	uint64_t dcs_clk;
+	uint64_t dcs_clk;	// raw DCS PLL frequency; the converters run at dcs_clk >> *_dcs_div
+	// programmed stream chain state, decoded from the last stream command. The effective ADC
+	// rate is dcs_clk >> rx_dcs_div and the user rate is that >> rx_decim_log2. All zero until
+	// a stream has programmed the chain; reprogrammed on every channel list apply.
+	uint8_t rx_dcs_div;	// 1 = hardware divide-by-2 engaged between DCS and ADC
+	uint8_t tx_dcs_div;
+	uint8_t rx_decim_log2;	// VSPA decimation factor 2^k
+	uint8_t tx_interp_log2;
 }
 );
 
