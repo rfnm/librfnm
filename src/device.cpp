@@ -1905,7 +1905,7 @@ MSDLL std::string device::rf_path_to_string(enum rfnm_rf_path path) {
         return "null";
     }
     else if (path == RFNM_PATH_EMBED_ANT) {
-        return "embed";
+        return "embedded";
     }
     else if (path == RFNM_PATH_LOOPBACK) {
         return "loopback";
