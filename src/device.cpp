@@ -1606,6 +1606,16 @@ MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
 
 
 
+MSDLL void device::get_rx_stream_stats(uint64_t &ok, uint64_t &dropped) {
+    // unlocked reads: aligned 64-bit loads of monotonic counters, good enough for stats
+    ok = 0;
+    dropped = 0;
+    for (int adc_id = 0; adc_id < 4; adc_id++) {
+        ok += rx_s.usb_cc_ok[adc_id];
+        dropped += rx_s.usb_cc_dropped[adc_id];
+    }
+}
+
 MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     struct rx_buf* buf;
     size_t queue_size;

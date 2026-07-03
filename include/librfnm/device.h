@@ -160,6 +160,9 @@ namespace rfnm {
         MSDLL const struct rfnm_dev_hwinfo * get_hwinfo();
         MSDLL const struct rfnm_dev_status * get_dev_status();
         MSDLL const struct transport_status * get_transport_status();
+        // cumulative RX packet counters since the last flush; a rising dropped count
+        // means the transport cannot sustain the configured rate
+        MSDLL void get_rx_stream_stats(uint64_t &ok, uint64_t &dropped);
         MSDLL const struct rfnm_api_rx_ch * get_rx_channel(uint32_t channel);
         MSDLL const struct rfnm_api_tx_ch * get_tx_channel(uint32_t channel);
         MSDLL uint32_t get_rx_channel_count();
