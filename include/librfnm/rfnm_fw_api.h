@@ -225,6 +225,11 @@ RFNM_PACKED_STRUCT(
 	uint64_t la_adc_error[4];
 	uint64_t la_dac_ok[4];
 	uint64_t la_dac_error[4];
+
+	// phytimer phase 1: computed-stamp chain breaks seen by the kernel (a sub's stamp
+	// disagreed with the previous sub's stamp + size x R without a DISCONT/epoch resync).
+	// Loud by design: DSP data loss must never be transparent at the transport layer.
+	uint64_t la_phytimer_error[4];
 }
 );
 
@@ -255,6 +260,16 @@ RFNM_PACKED_STRUCT(
 	uint32_t tx_state;
 	uint32_t tx_stream_seq;
 	uint32_t tx_ring_head;
+
+	// phytimer phase 1: RX timing anchor (the stream ack), fw-published on stream start.
+	// rx_t0 = tick of the first sample of the current epoch; ticks per output sample
+	// R = 2^rx_r_shift / 2 (exact); rx_regate_cnt low half = self-heal re-gates this
+	// epoch, high half = late-arm screams. This is the host's timebase anchor - the
+	// running RX stream's stamps ARE the clock for scheduling against it.
+	uint32_t rx_t0;
+	uint32_t rx_epoch;
+	uint32_t rx_r_shift;
+	uint32_t rx_regate_cnt;
 }
 );
 
@@ -302,13 +317,23 @@ typedef enum {
 #define LA_TX_BASE_BUFSIZE (4*RFNM_LA9310_DMA_TX_SIZE)
 #define LA_TX_BASE_BUFSIZE_12 ((LA_TX_BASE_BUFSIZE * 3) / 4)
 
+// phytimer phase 1: the two provably-dead cc passthrough head fields are repurposed as
+// flags words - same offset, same size, zero-init = contiguous/no-event. Intent is always
+// a flag, never a stamp sentinel (phytimer = 0 is a legal tick on a wrapping counter).
+// phytimer is the exact tick of the packet's first sample; a packet never contains a
+// stamp discontinuity inside its payload (the kernel flushes before a DISCONT sub).
+#define RFNM_RX_FLAG_DISCONT		(1u << 0)	// device self-heal re-gate happened right before this packet
+#define RFNM_TX_FLAG_TIME_VALID		(1u << 0)	// gate at exactly phytimer (phase 3)
+#define RFNM_TX_FLAG_EOB		(1u << 1)	// gate closes after this packet (phase 3)
+#define RFNM_STREAM_FLAG_EPOCH(f)	(((f) >> 8) & 0xFF)	// RX stream generation of the stamps in this packet
+
 RFNM_PACKED_STRUCT(
 	struct rfnm_rx_usb_buf {
 	uint32_t magic;
 	uint32_t adc_id;
 	uint32_t phytimer;
 	uint32_t fmt;	// RFNM_PACKET_FMT_*: payload encoding (was unused "dropped")
-	uint32_t adc_cc;
+	uint32_t rx_flags;	// bit0 DISCONT, [15:8] epoch (was the dead adc_cc passthrough)
 	uint64_t usb_cc;
 	uint32_t elem_cnt;	// samples in buf (variable-size packets: latency-deadline partial flush)
 	uint8_t buf[LA_RX_BASE_BUFSIZE_12 * RFNM_RX_USB_BUF_MULTI];
@@ -321,7 +346,7 @@ RFNM_PACKED_STRUCT(
 	uint32_t dac_id;
 	uint32_t phytimer;
 	uint32_t fmt;	// RFNM_PACKET_FMT_*: payload encoding (was unused "dropped")
-	uint32_t dac_cc;
+	uint32_t tx_flags;	// bit0 TIME_VALID, bit1 EOB, [15:8] epoch (was the never-populated dac_cc)
 	uint64_t usb_cc;
 	// base bufs (256 samples each) present in this packet, 1..RFNM_TX_USB_BUF_MULTI;
 	// wire length = RFNM_USB_TX_PACKET_HEAD_SIZE + multi * LA_TX_BASE_BUFSIZE_12

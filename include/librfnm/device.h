@@ -67,8 +67,10 @@ namespace rfnm {
 
     struct rx_buf {
         uint8_t* buf;
+        // exact tick of this buffer's first sample (61.44 MHz phy timer, u32 wrapping;
+        // ticks per sample R = 2^dev_status.rx_r_shift / 2, valid within rx_flags' epoch)
         uint32_t phytimer;
-        uint32_t adc_cc;
+        uint32_t rx_flags;  // RFNM_RX_FLAG_DISCONT + epoch[15:8]; was the dead adc_cc passthrough
         uint64_t usb_cc;
         uint32_t adc_id;
         // valid samples in buf (variable-size packets: the device flushes partial packets after a
@@ -79,7 +81,7 @@ namespace rfnm {
     struct tx_buf {
         uint8_t* buf;
         uint32_t phytimer;
-        uint32_t dac_cc;
+        uint32_t tx_flags;  // RFNM_TX_FLAG_* + epoch[15:8] (phase 3); was the never-populated dac_cc
         uint64_t usb_cc;
         uint32_t dac_id;
         // samples to send from buf: 0 = full packet (RFNM_USB_TX_PACKET_ELEM_CNT); otherwise a
@@ -110,6 +112,16 @@ namespace rfnm {
 
         uint64_t usb_cc_dropped[4];
         uint64_t usb_cc_ok[4];
+
+        // phytimer phase 1 stamp-chain validation at the ordered dqbuf point: expected =
+        // previous packet's stamp + elem_cnt x R. A break without a DISCONT/epoch resync
+        // is a protocol error (phytimer_break); a flagged one is a clean device self-heal
+        // (phytimer_discont). Chains re-anchor after any event so one break = one count.
+        uint32_t expected_phytimer[4];
+        uint8_t phytimer_epoch[4];
+        bool phytimer_valid[4];
+        uint64_t phytimer_discont[4];
+        uint64_t phytimer_break[4];
     };
 
     struct tx_buf_s {

@@ -929,7 +929,7 @@ void device::threadfn(size_t thread_index) {
                 unpack_12_to_cf32(buf->buf, (uint8_t*)lrxbuf->buf, lrxbuf->elem_cnt);
             }
 
-            buf->adc_cc = lrxbuf->adc_cc;
+            buf->rx_flags = lrxbuf->rx_flags;
             buf->adc_id = lrxbuf->adc_id;
             buf->usb_cc = lrxbuf->usb_cc;
             buf->phytimer = lrxbuf->phytimer;
@@ -1024,7 +1024,7 @@ void device::threadfn(size_t thread_index) {
                 pack_cs16_to_12((uint8_t*)ltxbuf->buf, buf->buf, tx_elems);
                 ltxbuf->fmt = RFNM_PACKET_FMT_PACKED12;
             }
-            ltxbuf->dac_cc = buf->dac_cc;
+            ltxbuf->tx_flags = buf->tx_flags;
             ltxbuf->dac_id = buf->dac_id;
             ltxbuf->usb_cc = buf->usb_cc;
             ltxbuf->phytimer = buf->phytimer;
@@ -2087,6 +2087,37 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
 
     rx_s.usb_cc[required_adc_id]++;
 
+    // phytimer phase 1: stamp-chain validation at the ordered pop point (packets are in
+    // usb_cc order per adc here). Engages only when the packet's epoch matches the cached
+    // stream ack in dev_status, so rate-change windows and stale-prefix drains can never
+    // manufacture false breaks. R = 2^rx_r_shift / 2 ticks per sample, exact. The chain
+    // re-anchors after every event so one break is one count, not a storm.
+    {
+        int a = required_adc_id;
+        uint8_t pkt_epoch = (uint8_t)RFNM_STREAM_FLAG_EPOCH(lb->rx_flags);
+        if (pkt_epoch != (uint8_t)(s->dev_status.rx_epoch & 0xFF)) {
+            rx_s.phytimer_valid[a] = false;
+        } else {
+            if (!rx_s.phytimer_valid[a] || pkt_epoch != rx_s.phytimer_epoch[a]) {
+                // fresh anchor: first validated packet of this stream generation
+            } else if (lb->rx_flags & RFNM_RX_FLAG_DISCONT) {
+                // clean device self-heal re-gate: the stamp jump is flagged and stays exact
+                rx_s.phytimer_discont[a]++;
+            } else if (lb->phytimer != rx_s.expected_phytimer[a]) {
+                // silent chain break: samples were lost somewhere nothing flagged (or a
+                // transport drop already counted by usb_cc - layered counters by design)
+                rx_s.phytimer_break[a]++;
+                if (rx_s.phytimer_break[a] <= 10 || (rx_s.phytimer_break[a] % 1000) == 0) {
+                    spdlog::warn("phytimer chain break #{} adc {}: got {} expected {} (usb_cc {})",
+                        rx_s.phytimer_break[a], a, lb->phytimer, rx_s.expected_phytimer[a], lb->usb_cc);
+                }
+            }
+            rx_s.phytimer_valid[a] = true;
+            rx_s.phytimer_epoch[a] = pkt_epoch;
+            rx_s.expected_phytimer[a] = lb->phytimer + (uint32_t)(((uint64_t)lb->elem_cnt << s->dev_status.rx_r_shift) >> 1);
+        }
+    }
+
     //if ((lb->usb_cc & 0xff) < 0x10) {
     //    std::lock_guard<std::mutex> lockGuard(rx_s.out_mutex);
     //    spdlog::info("cc {} {} {}", lb->usb_cc, lcc, rx_s.out.size());
@@ -2116,6 +2147,7 @@ MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
         }
 
         rx_s.usb_cc[adc_id] = UINT64_MAX;
+        rx_s.phytimer_valid[adc_id] = false;
     }
 
     return RFNM_API_OK;
