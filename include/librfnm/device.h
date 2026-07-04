@@ -7,8 +7,9 @@
 #include <thread>
 #include <array>
 #include <vector>
-
-#include <asio.hpp>
+#include <atomic>
+#include <chrono>
+#include <cstdint>
 
 #include "constants.h"
 #include "rfnm_fw_api.h"
@@ -279,19 +280,20 @@ namespace rfnm {
 
         std::string rfnm_eth_transport_ip_addr;
 
-        asio::ip::udp::endpoint rfnm_ctrl_ep_udp;
-        std::unique_ptr<asio::io_context> rfnm_ctrl_ioctx_tcp;
-        std::unique_ptr<asio::ip::udp::socket> rfnm_ctrl_socket_udp;
+        // Native TCP socket handle (int fd on POSIX, SOCKET on Windows) widened to a plain
+        // integer so this public header pulls in neither asio nor platform socket headers.
+        // All socket operations live in the private layer src/net_socket.*; UINT64_MAX = not open.
+        struct net_sock {
+            uint64_t h = UINT64_MAX;
+        };
 
-
-        std::unique_ptr<asio::ip::tcp::socket> rfnm_ctrl_socket_tcp;
+        net_sock rfnm_ctrl_socket_tcp;
         // Serializes a full control-socket transaction (SET write, or GET write+read).
         // Without it, the worker status poll and main-thread get/apply/set race on the
         // single TCP control socket and consume each other's responses.
         std::mutex rfnm_ctrl_socket_tcp_mutex;
 
-        std::shared_ptr<asio::io_context> tcp_data_io_context;
-        std::shared_ptr<asio::ip::tcp::socket> tcp_data_socket;
+        net_sock tcp_data_socket;
         std::mutex tcp_data_tx_mutex;
         std::mutex tcp_data_rx_mutex;
         std::atomic<bool> tcp_data_connected{ false };
