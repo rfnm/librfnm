@@ -614,9 +614,9 @@ void device::threadfn(size_t thread_index) {
                 }
                 else if (ret == 0) {
 
-                    spdlog::error("rx pool timeout");
-
-                    // timeout
+                    // poll timeout: no local packet within 5 ms. Normal idle tick at low
+                    // sample rates (a 2.4 MSps stream fills a packet slower than the poll
+                    // period), so it is not logged - it used to spam ~115 lines/s here.
 
                     {
                         std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
