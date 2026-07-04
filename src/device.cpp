@@ -241,10 +241,15 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
 
         //spdlog::info("Max theoretical transport speed is {} Mbps", s->transport_status.theoretical_mbps);
 
-        if (ioctl(fd, RFNM_IOCTL_BASE + (0xff & RFNM_GET_SM_RESET), &ep_ctrl_buf) < 0) {
-            //close(fd);
-            spdlog::error("Couldn't reset state machine");
-            goto exit_close_local;
+        // RFNM_NO_SM_RESET: open without resetting the stream state machine, so a second
+        // local client (e.g. an RX-only observer) can coexist with a running daemon's
+        // stream instead of killing it. Bench/measurement knob - the reset stays the default.
+        if (!getenv("RFNM_NO_SM_RESET")) {
+            if (ioctl(fd, RFNM_IOCTL_BASE + (0xff & RFNM_GET_SM_RESET), &ep_ctrl_buf) < 0) {
+                //close(fd);
+                spdlog::error("Couldn't reset state machine");
+                goto exit_close_local;
+            }
         }
         reset_device_state();
 
@@ -1749,7 +1754,13 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     //std::lock_guard<std::mutex> lockGuard1(tx_s.cc_mutex);
     std::lock_guard<std::mutex> lockGuard1(s_dev_status_mutex);
 
-    if (tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf[0] > 2000) {
+    // SIGNED window: after an unclean client death the device still publishes the
+    // dead session's consumed-cc (e.g. ~45k) while a fresh client counts from 1; the
+    // old unsigned subtraction wrapped huge, read as "window full", and gated TX shut
+    // permanently (RX alive, tool shedding 100% - the "TX dead after kill" wedge).
+    // A stale/ahead device counter now reads negative = window open; the kernel's
+    // cc-mismatch resync then adopts the new session's numbering and it self-heals.
+    if ((int64_t)(tx_s.usb_cc - s->dev_status.usb_dac_last_dqbuf[0]) > 2000) {
         //spdlog::info("RFNM_API_MIN_QBUF_QUEUE_FULL {} {}", tx_s.usb_cc, static_cast<unsigned long>(s->dev_status.usb_dac_last_dqbuf[0]));
         return RFNM_API_MIN_QBUF_QUEUE_FULL;
     }
