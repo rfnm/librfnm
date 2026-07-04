@@ -2202,10 +2202,15 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
                 return RFNM_API_TIMEOUT;
             }
 
-            // back off while the device works through a slow path (e.g. a reclock)
-            // so the control socket isn't hammered for seconds at 1ms intervals
-            int64_t poll_ms = 1 + us_int.count() / 20000;
-            std::this_thread::sleep_for(std::chrono::milliseconds(std::min<int64_t>(poll_ms, 50)));
+            // fast tunes finish in well under a millisecond, so poll tightly at first;
+            // after a few ms back off while the device works through a slow path (e.g. a
+            // reclock) so the control socket isn't hammered for seconds at 1ms intervals
+            if (us_int.count() < 4000) {
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            } else {
+                int64_t poll_ms = 1 + us_int.count() / 20000;
+                std::this_thread::sleep_for(std::chrono::milliseconds(std::min<int64_t>(poll_ms, 50)));
+            }
         }
     }
 
