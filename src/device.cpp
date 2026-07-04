@@ -108,15 +108,51 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
 
             s->transport_status.theoretical_mbps = 3500;
 
-            usb_handle->boost = libusb_open_device_with_vid_pid(nullptr, RFNM_USB_VID, RFNM_USB_PID_BOOST);
-            if (usb_handle->boost) {
-                if (libusb_get_device_speed(libusb_get_device(usb_handle->boost)) >= LIBUSB_SPEED_SUPER) {
-                    r = libusb_claim_interface(usb_handle->boost, 0);
-                    if (r >= 0) {
-                        s->transport_status.theoretical_mbps += 3500;
-                        s->transport_status.usb_boost_connected = 1;
+            // The boost interface must belong to THE SAME BOARD as the primary: opening
+            // by VID/PID alone grabs whichever board enumerates first, and on a multi-
+            // board host that (a) reads another board's samples (observed: framing
+            // garbage) and (b) arms the victim board's boost endpoints, whose queued
+            // requests then eat its shared IN-inflight budget until its RX shipping
+            // gates shut permanently (the duplex wedge's terminal state). Match serials.
+            usb_handle->boost = nullptr;
+            {
+                libusb_device** blist;
+                ssize_t bcnt = libusb_get_device_list(nullptr, &blist);
+                unsigned char prim_serial[64] = {0}, cand_serial[64] = {0};
+                struct libusb_device_descriptor pdesc;
+                libusb_get_device_descriptor(libusb_get_device(usb_handle->primary), &pdesc);
+                libusb_get_string_descriptor_ascii(usb_handle->primary, pdesc.iSerialNumber, prim_serial, sizeof(prim_serial) - 1);
+                for (ssize_t bi = 0; bi < bcnt; bi++) {
+                    struct libusb_device_descriptor bdesc;
+                    if (libusb_get_device_descriptor(blist[bi], &bdesc)) {
+                        continue;
                     }
+                    if (bdesc.idVendor != RFNM_USB_VID || bdesc.idProduct != RFNM_USB_PID_BOOST) {
+                        continue;
+                    }
+                    libusb_device_handle* bh = nullptr;
+                    if (libusb_open(blist[bi], &bh) || !bh) {
+                        continue;
+                    }
+                    cand_serial[0] = 0;
+                    libusb_get_string_descriptor_ascii(bh, bdesc.iSerialNumber, cand_serial, sizeof(cand_serial) - 1);
+                    if (strcmp((char*)prim_serial, (char*)cand_serial)) {
+                        libusb_close(bh);
+                        continue;
+                    }
+                    usb_handle->boost = bh;
+                    break;
                 }
+                libusb_free_device_list(blist, 1);
+            }
+            // STOPGAP: do not claim the boost interface at all. Claiming arms the gadget's
+            // boost endpoints, whose queued requests share the IN-inflight budget - and the
+            // async RX engine does not pump boost endpoints yet, so armed-but-unpumped boost
+            // requests pin the budget at its cap and gate RX shipping shut (the duplex
+            // wedge's terminal state). Re-enable when the engine pumps 8 pipelines.
+            if (usb_handle->boost) {
+                libusb_close(usb_handle->boost);
+                usb_handle->boost = nullptr;
             }
 
             spdlog::info("Max theoretical transport speed is {} Mbps", s->transport_status.theoretical_mbps);
@@ -456,6 +492,28 @@ static void rfnm_usb_tx_async_cb(struct libusb_transfer* t) {
     int* slot_state = (int*)t->user_data;
     *slot_state = (t->status == LIBUSB_TRANSFER_COMPLETED && t->actual_length == t->length) ? 2 : 3;
 }
+
+// async pipelined RX on all four IN endpoints (the RX mirror of the TX engine above).
+// The sync one-shot reads discarded partially-received transfers on their 100 ms
+// timeout - every discard is a silently lost packet, and under full-duplex load those
+// losses fed the reorder machinery a constant stream of single-packet holes (the USB
+// duplex collapse cycle). Async URBs persist across waits, so a slow scheduling turn
+// delays a packet instead of destroying it. Per-endpoint reaping is sequential
+// (next_reap ring) so each endpoint's stream stays in submission order; cross-endpoint
+// skew is bounded by the pipeline depth and handled by the cc reorder queue as before.
+#define RFNM_RX_ASYNC_EPS 4
+#define RFNM_RX_ASYNC_URBS_PER_EP 6
+struct usb_rx_async_state {
+    libusb_transfer* xfer[RFNM_RX_ASYNC_EPS][RFNM_RX_ASYNC_URBS_PER_EP];
+    uint8_t* xbuf[RFNM_RX_ASYNC_EPS][RFNM_RX_ASYNC_URBS_PER_EP];
+    int state[RFNM_RX_ASYNC_EPS][RFNM_RX_ASYNC_URBS_PER_EP];  // 0 unsubmitted, 1 in flight, 2 done, 3 failed
+    int next_reap[RFNM_RX_ASYNC_EPS];
+    int initialized;
+};
+static void rfnm_usb_rx_async_cb(struct libusb_transfer* t) {
+    int* slot_state = (int*)t->user_data;
+    *slot_state = (t->status == LIBUSB_TRANSFER_COMPLETED) ? 2 : 3;
+}
 // -------------------------------------------------------------------------------------
 
 
@@ -510,8 +568,27 @@ void device::threadfn(size_t thread_index) {
             if (s->transport_status.transport == TRANSPORT_TCP && thread_index != 1) {
                 goto skip_rx;
             }
+            // USB RX runs on one thread too: the async engine below keeps 24 URBs in
+            // flight from a single reaper, which replaces the 16-thread sync-read pool
+            if (s->transport_status.transport == TRANSPORT_USB && thread_index != 1) {
+                goto skip_rx;
+            }
 
             struct rx_buf* buf;
+
+            if (getenv("RFNM_DEBUG_STALL") && thread_index == 1) {
+                static thread_local auto last_census2 = std::chrono::high_resolution_clock::now();
+                auto nowc2 = std::chrono::high_resolution_clock::now();
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(nowc2 - last_census2).count() > 1000) {
+                    last_census2 = nowc2;
+                    size_t rxin, rxout = 0, txin, txout;
+                    { std::lock_guard<std::mutex> l(rx_s.in_mutex); rxin = rx_s.in.size(); }
+                    for (int a = 0; a < 4; a++) { rxout += rx_s.out[a].size(); }
+                    { std::lock_guard<std::mutex> l(tx_s.in_mutex); txin = tx_s.in.size(); }
+                    { std::lock_guard<std::mutex> l(tx_s.out_mutex); txout = tx_s.out.size(); }
+                    spdlog::info("CENSUS2 rx.in {} rx.out {} tx.in {} tx.out {}", rxin, rxout, txin, txout);
+                }
+            }
 
 #if 0
 
@@ -561,25 +638,157 @@ void device::threadfn(size_t thread_index) {
                     s->transport_status.boost_pp_rx = !s->transport_status.boost_pp_rx;
                 }
 
-                r = libusb_bulk_transfer(lusb_handle, (((tpm.ep_id % 4) + 1) | LIBUSB_ENDPOINT_IN),
-                    (uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_SIZE, &transferred, 100);
-                if (r == LIBUSB_ERROR_NO_DEVICE || r == LIBUSB_ERROR_IO) {
-                    // Device was reset or closed, exit gracefully
-                    spdlog::info("Thread {} USB device lost, exiting", thread_index);
-                    break;
+                // async engine (boost handle unused here: single-cable benches leave it
+                // disconnected and the pump keeps strict per-endpoint ordering on primary)
+                static thread_local usb_rx_async_state arz = {};
+                if (getenv("RFNM_DEBUG_STALL")) {
+                    static thread_local auto last_census = std::chrono::high_resolution_clock::now();
+                    auto nowc = std::chrono::high_resolution_clock::now();
+                    if (std::chrono::duration_cast<std::chrono::milliseconds>(nowc - last_census).count() > 1000) {
+                        last_census = nowc;
+                        int st[4] = {0,0,0,0};
+                        for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
+                            for (int q = 0; q < RFNM_RX_ASYNC_URBS_PER_EP; q++) {
+                                st[arz.state[e][q] & 3]++;
+                            }
+                        }
+                        size_t rxin, rxout = 0, txin, txout;
+                        { std::lock_guard<std::mutex> l(rx_s.in_mutex); rxin = rx_s.in.size(); }
+                        for (int a = 0; a < 4; a++) { rxout += rx_s.out[a].size(); }
+                        { std::lock_guard<std::mutex> l(tx_s.in_mutex); txin = tx_s.in.size(); }
+                        { std::lock_guard<std::mutex> l(tx_s.out_mutex); txout = tx_s.out.size(); }
+                        spdlog::info("CENSUS rx.in {} rx.out {} tx.in {} tx.out {} rxURB f{}/i{}/d{}/e{}",
+                            rxin, rxout, txin, txout, st[0], st[1], st[2], st[3]);
+                    }
                 }
-                else if (r) {
-                    spdlog::error("RX bulk tx fail {} {}", tpm.ep_id, r);
+                if (!arz.initialized) {
+                    libusb_device_handle* prim_handle = usb_handle->primary;   // never the boost: on
+                    // multi-board hosts the boost discovery can bind a DIFFERENT board's interface
+                    for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
+                        for (int q = 0; q < RFNM_RX_ASYNC_URBS_PER_EP; q++) {
+                            arz.xfer[e][q] = libusb_alloc_transfer(0);
+                            arz.xbuf[e][q] = (uint8_t*)malloc(RFNM_USB_RX_PACKET_SIZE);
+                            libusb_fill_bulk_transfer(arz.xfer[e][q], prim_handle, ((e + 1) | LIBUSB_ENDPOINT_IN),
+                                arz.xbuf[e][q], RFNM_USB_RX_PACKET_SIZE, rfnm_usb_rx_async_cb, &arz.state[e][q], 0);
+                            arz.state[e][q] = libusb_submit_transfer(arz.xfer[e][q]) ? 3 : 1;
+                        }
+                        arz.next_reap[e] = 0;
+                    }
+                    arz.initialized = 1;
+                }
+                int got_ep = -1;
+                static thread_local int rx_reap_rr = 0;
+                static thread_local auto rx_last_progress = std::chrono::high_resolution_clock::now();
+                auto rx_tstart = std::chrono::high_resolution_clock::now();
+                // UDC stall recovery, host-driven: if no completion for 2 s while URBs
+                // are pending, the gadget's UDC has stopped mapping requests to TRBs (a
+                // dwc3 lost-event class bug). SET_INTERFACE re-runs the gadget's set_alt
+                // (full endpoint re-arm + request requeue device-side) AND resets the
+                // host xHCI endpoint state - the only recovery that resyncs BOTH sides
+                // (device-only re-arm desyncs SS sequence state; session re-open works
+                // for the same reason this does).
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - rx_last_progress).count() > 2000) {
+                    spdlog::warn("RX pipeline dead 2s: SET_INTERFACE resync");
+                    for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
+                        for (int q = 0; q < RFNM_RX_ASYNC_URBS_PER_EP; q++) {
+                            if (arz.state[e][q] == 1) {
+                                libusb_cancel_transfer(arz.xfer[e][q]);
+                            }
+                        }
+                    }
+                    for (int spin = 0; spin < 60; spin++) {
+                        struct timeval tvc = { 0, 2000 };
+                        libusb_handle_events_timeout(nullptr, &tvc);
+                        int busy = 0;
+                        for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
+                            for (int q = 0; q < RFNM_RX_ASYNC_URBS_PER_EP; q++) {
+                                busy += (arz.state[e][q] == 1);
+                            }
+                        }
+                        if (!busy) {
+                            break;
+                        }
+                    }
+                    libusb_set_interface_alt_setting(lusb_handle, 0, 0);
+                    for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
+                        for (int q = 0; q < RFNM_RX_ASYNC_URBS_PER_EP; q++) {
+                            arz.state[e][q] = libusb_submit_transfer(arz.xfer[e][q]) ? 3 : 1;
+                        }
+                        arz.next_reap[e] = 0;
+                    }
+                    rx_reap_rr = 0;
+                    rx_last_progress = std::chrono::high_resolution_clock::now();
+                }
+                while (got_ep < 0) {
+                    // fair rotation across endpoints: preferential draining of one endpoint
+                    // exhausts the others' URB pools (all slots completed-but-unreaped), the
+                    // gadget's requests on those endpoints starve, and the device ring jumps
+                    // forward over the parked packets - giant cc holes and a wedged stream
+                    for (int i = 0; i < RFNM_RX_ASYNC_EPS; i++) {
+                        int e = (rx_reap_rr + i) % RFNM_RX_ASYNC_EPS;
+                        int q = arz.next_reap[e];
+                        if (arz.state[e][q] == 2) { got_ep = e; rx_reap_rr = (e + 1) % RFNM_RX_ASYNC_EPS; break; }
+                        if (arz.state[e][q] == 3) {
+                            // failed HEAD slot: consume the failure in order - resubmit and
+                            // advance. Resubmitting a non-head slot would file it behind its
+                            // siblings in the endpoint queue and permanently desync next_reap
+                            // from the endpoint's completion order (wedge: heads in flight,
+                            // completed slots parked unreapable behind them).
+                            if (arz.xfer[e][q]->status == LIBUSB_TRANSFER_NO_DEVICE) {
+                                spdlog::info("Thread {} USB device lost, exiting", thread_index);
+                                goto usb_rx_dead;
+                            }
+                            // a device-side endpoint re-arm (UDC stall recovery) surfaces
+                            // here as STALL: the pipe must be cleared before any resubmit
+                            // can succeed, else the client stays dead while the board is
+                            // healthy again
+                            if (arz.xfer[e][q]->status == LIBUSB_TRANSFER_STALL) {
+                                libusb_clear_halt(lusb_handle, arz.xfer[e][q]->endpoint);
+                                spdlog::info("RX ep {:#x} halt cleared", arz.xfer[e][q]->endpoint);
+                            }
+                            arz.state[e][q] = libusb_submit_transfer(arz.xfer[e][q]) ? 3 : 1;
+                            if (arz.state[e][q] == 1) {
+                                arz.next_reap[e] = (q + 1) % RFNM_RX_ASYNC_URBS_PER_EP;
+                            }
+                        }
+                    }
+                    if (got_ep < 0) {
+                        struct timeval tv = { 0, 2000 };
+                        libusb_handle_events_timeout(nullptr, &tv);
+                        auto rx_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::high_resolution_clock::now() - rx_tstart);
+                        if (rx_us.count() > 100000) {
+                            break;  // nothing completed in 100 ms: not an error, nothing was lost
+                        }
+                    }
+                }
+                if (got_ep < 0) {
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
                     rx_s.cv.notify_one();
                     goto skip_rx;
                 }
+                if (0) {
+                usb_rx_dead:
+                    break;
+                }
+                rx_last_progress = std::chrono::high_resolution_clock::now();
+                {
+                    int q = arz.next_reap[got_ep];
+                    transferred = arz.xfer[got_ep][q]->actual_length;
+                    memcpy(lrxbuf, arz.xbuf[got_ep][q], transferred);
+                    arz.state[got_ep][q] = libusb_submit_transfer(arz.xfer[got_ep][q]) ? 3 : 1;
+                    arz.next_reap[got_ep] = (q + 1) % RFNM_RX_ASYNC_URBS_PER_EP;
+                }
+                r = 0;
 
                 // variable-size packet: the device shortens the wire transfer to the valid
-                // sample prefix and declares the count in the header (latency-deadline flush);
-                // every transfer must be self-consistent with its header
-                if ((size_t)transferred != RFNM_USB_RX_PACKET_HEAD_SIZE + (size_t)lrxbuf->elem_cnt * 3) {
+                // sample prefix and declares the count in the header (latency-deadline flush).
+                // The transfer may also arrive PADDED past the declared payload (full-size
+                // wire transfer carrying a partial packet) - accept any transfer that contains
+                // at least the declared payload with a valid head; reject short/garbage ones.
+                if (lrxbuf->magic != 0x7ab8bd6f || lrxbuf->elem_cnt > RFNM_USB_RX_PACKET_ELEM_CNT ||
+                        (size_t)transferred < RFNM_USB_RX_PACKET_HEAD_SIZE + (size_t)lrxbuf->elem_cnt * 3) {
                     spdlog::error("thread loop RX usb wrong size, {}, ep {}, elem_cnt {}, magic {:x}", transferred, tpm.ep_id, (uint32_t)lrxbuf->elem_cnt, (uint32_t)lrxbuf->magic);
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
@@ -843,7 +1052,12 @@ void device::threadfn(size_t thread_index) {
                         tx_s.cv.notify_one();
                         az.state[q] = 0;
                     } else if (az.state[q] == 3) {
-                        spdlog::error("TX async transfer failed, requeueing app buf");
+                        spdlog::error("TX async transfer failed (status {} len {}/{}), requeueing app buf",
+                            (int)az.xfer[q]->status, az.xfer[q]->actual_length, az.xfer[q]->length);
+                        if (az.xfer[q]->status == LIBUSB_TRANSFER_STALL) {
+                            libusb_clear_halt(lusb_handle, (1 | LIBUSB_ENDPOINT_OUT));
+                            spdlog::info("TX ep halt cleared");
+                        }
                         std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
                         tx_s.in.push(az.app[q]);
                         reorder_tx_queue_nolock(tx_s);
@@ -1024,6 +1238,10 @@ void device::threadfn(size_t thread_index) {
 
     read_dev_status:
 
+        if (s->transport_status.transport == TRANSPORT_USB && thread_index > 1) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
         {
 #if 1
             using std::chrono::high_resolution_clock;
@@ -1538,6 +1756,16 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
 
     std::lock_guard<std::mutex> lockGuard2(tx_s.in_mutex);
 
+    // bound the in-queue depth independently of the cc window: the cc window (2000)
+    // is wider than a typical app buffer pool (1500), so a TX path slower than the
+    // RX path could swallow the app's entire pool into this queue before the window
+    // closed - RX then starves for buffers and a full-duplex relay deadlocks (the
+    // TCP wedge: wire-limited TX, all 1499 buffers parked here). 256 packets is ~85 ms
+    // of pipeline at full rate - never the throughput limiter, always pool-safe.
+    if (tx_s.in.size() >= 256) {
+        return RFNM_API_MIN_QBUF_QUEUE_FULL;
+    }
+
     tx_s.qbuf_cnt++;
     tx_s.usb_cc++;
 
@@ -1674,12 +1902,17 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     //static int stale_high_cnt = 0;
 
     std::vector<uint64_t> discarded;
-    while (queue_size > 1) {
+    while (queue_size > 0) {
         // discard anything OLDER than expected, INCLUDING expected-1: a duplicate of the
         // just-consumed cc (kernel ring wrap re-stamping a buffer held by a late in-flight
         // req) otherwise sits at the queue top forever - neither continuous nor discardable -
-        // and wedges the stream behind it until the timeout mass-discard kills the session
-        if (buf->usb_cc < rx_s.usb_cc[adc_id] || (/*stale_high_cnt < 4 &&*/ buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN))) {
+        // and wedges the stream behind it until the timeout mass-discard kills the session.
+        // A stale-OLDER top is discardable even as the last queued buffer: it can never be
+        // delivered, and the old queue_size > 1 guard left it parked at the top blocking
+        // dqbuf entirely (the inflight reset jumps expected forward while old packets are
+        // still in flight; the late arrival then starves the stream in a tight no-data
+        // spin - the full-duplex USB collapse cycle). Far-NEWER tops keep the > 1 guard.
+        if (buf->usb_cc < rx_s.usb_cc[adc_id] || (queue_size > 1 && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN))) {
 
             /*if (discarded.empty() && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN)) {
                 stale_high_cnt++;
@@ -1703,12 +1936,22 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
 
             queue_size--;
             //spdlog::info("stale cc {} discarded from adc {}", usb_cc, adc_id);
+            if (queue_size == 0) {
+                break;	// drained the queue entirely; no top to inspect
+            }
             buf = rx_s.out[adc_id].top();
         }
         else {
             break;
         }
     };
+
+    if (queue_size == 0) {
+        if (acquire_lock) {
+            rx_s.out_mutex.unlock();
+        }
+        return 0;
+    }
 
 
 
@@ -1740,7 +1983,13 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             spdlog::info("NOTCONT adc {} top_cc {} expected {} qsize {}", adc_id, buf->usb_cc, rx_s.usb_cc[adc_id], queue_size);
         }
     }
-    if (queue_size > RX_RECOMB_BUF_LEN) {
+    // A hole at the queue head with a healthy backlog behind it means the expected
+        // packet was lost in transit, not reordered (at most MAX_THREAD_COUNT reads are
+        // in flight): step over it now. Gating this on RX_RECOMB_BUF_LEN hoarded ~200 ms
+        // of stream behind a packet that would never arrive - under full-duplex USB,
+        // where occasional single-packet losses are real, that became a stall/discard
+        // cycle that collapsed the whole stream. usb_cc_dropped accounts for the holes.
+        if (queue_size > 16) {
             dqbuf_overwrite_cc(adc_id, acquire_lock);
         }
         return 0;

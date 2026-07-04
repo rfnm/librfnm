@@ -247,6 +247,14 @@ RFNM_PACKED_STRUCT(
 	// the local/TCP transport keeps its own RX packet counter: variable-size USB packets make the
 	// usb ring cc advance faster than the local ring cc, so TCP/local consumers must check this one
 	uint64_t local_adc_last_qbuf[4];
+
+	// TX ring protocol (fw-published, heartbeat-fresh): read position, state
+	// (bit0 = tx active, bits 4:1 = upsampling log2), fw arm/disarm sequence, and
+	// the driver's write head - occupancy = (head - read_ptr) mod ring
+	uint32_t tx_ring_read_ptr;
+	uint32_t tx_state;
+	uint32_t tx_stream_seq;
+	uint32_t tx_ring_head;
 }
 );
 
