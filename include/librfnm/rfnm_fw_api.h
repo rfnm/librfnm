@@ -263,9 +263,9 @@ RFNM_PACKED_STRUCT(
 
 	// phytimer phase 1: RX timing anchor (the stream ack), fw-published on stream start.
 	// rx_t0 = tick of the first sample of the current epoch; ticks per output sample
-	// R = 2^rx_r_shift / 2 (exact); rx_regate_cnt low half = self-heal re-gates this
-	// epoch, high half = late-arm screams. This is the host's timebase anchor - the
-	// running RX stream's stamps ARE the clock for scheduling against it.
+	// R = 2^rx_r_shift / 2 (exact); rx_regate_cnt = lanes parked after an AXIQ overrun
+	// this epoch (the kernel re-gates on seeing it - a new epoch). This is the host's
+	// timebase anchor - the running RX stream's stamps ARE the clock for scheduling.
 	uint32_t rx_t0;
 	uint32_t rx_epoch;
 	uint32_t rx_r_shift;
