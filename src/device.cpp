@@ -1906,8 +1906,19 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
 
     if (abs(((int64_t)dev_last_qbuf) - ((int64_t)rx_s.usb_cc[adc_id])) > max_allowed_in_flight) {
-        spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], static_cast<uint64_t>(dev_last_qbuf));
-        rx_s.usb_cc[adc_id] = dev_last_qbuf;
+        if (dev_last_qbuf > rx_s.usb_cc[adc_id]) {
+            // device counter far AHEAD: consumer lag - jump forward to the head
+            spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], static_cast<uint64_t>(dev_last_qbuf));
+            rx_s.usb_cc[adc_id] = dev_last_qbuf;
+        } else {
+            // device counter far BEHIND: the device-side counter restarted (LA9310
+            // hard reset during a reclock). Pinning expected to the stale head wedges
+            // the stream forever - the new session counts from 1 and the hole-step
+            // logic cannot cross the seam at qsize 1 (the spectrumd boot-loop bug).
+            // Re-anchor on whatever arrives next instead.
+            spdlog::info("device cc counter restarted ({} < expected {}), re-anchoring adc {}", static_cast<uint64_t>(dev_last_qbuf), rx_s.usb_cc[adc_id], adc_id);
+            rx_s.usb_cc[adc_id] = UINT64_MAX;
+        }
     }
 
     //static int stale_high_cnt = 0;
