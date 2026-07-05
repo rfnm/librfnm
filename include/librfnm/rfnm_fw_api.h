@@ -270,6 +270,17 @@ RFNM_PACKED_STRUCT(
 	uint32_t rx_epoch;
 	uint32_t rx_r_shift;
 	uint32_t rx_regate_cnt;
+
+	// phytimer phase 3: TX timing anchor. tx_t0 = tick the DAC gate opens (the SAME
+	// minted tick as rx_t0 when both directions apply together - one timeline); ring
+	// slot n airs at tx_t0 + n*256*R ticks, R = 2^tx_r_shift / 2 exact. tx_epoch
+	// increments per TX stream start. Health: fw DAC starvation + kernel-side timed
+	// placement rejects (misaligned / too-late / too-far / rewind).
+	uint32_t tx_t0;
+	uint32_t tx_epoch;
+	uint32_t tx_r_shift;
+	uint32_t tx_underrun_cnt;
+	uint32_t tx_timed_reject_cnt;
 }
 );
 

@@ -103,6 +103,20 @@ namespace rfnm {
         uint32_t regates;   // fw lane parks (overrun heals) this epoch
     };
 
+    // phytimer phase 3: the TX timing anchor. Same tick domain as rx_timing - when
+    // both directions apply together t0 is the SAME minted tick, so "tick T" means
+    // one instant across RX and TX (the timing-advance primitive). Ring slot n airs
+    // at t0 + n*256*(r_num/r_den) ticks; schedule with tx_buf_schedule().
+    struct tx_timing {
+        uint64_t t0;        // tick the DAC gate opened for this epoch (raw 32-bit, zero-extended)
+        uint64_t tick_hz;
+        uint32_t r_num;     // ticks per TX ring sample = r_num / r_den (exact)
+        uint32_t r_den;
+        uint8_t epoch;      // TX stream generation
+        uint32_t underruns;     // fw-side DAC starvation events (anchor-health)
+        uint32_t timed_rejects; // kernel-side scheduled-packet rejects (late/misaligned/rewind)
+    };
+
     class rx_buf_compare {
     public:
         bool operator()(struct rx_buf* lra, struct rx_buf* lrb) {
@@ -209,6 +223,18 @@ namespace rfnm {
         // self-heals) vs unflagged breaks (data loss nothing accounted for - any
         // nonzero break count is a bug somewhere).
         MSDLL void get_rx_timing_health(uint64_t *disconts, uint64_t *breaks);
+
+        // ---- phytimer phase 3: timed TX ----
+        // Snapshot of the TX anchor. Refresh dev_status first (get(REQ_DEV_STATUS))
+        // if no RX stream is running to refresh it for you.
+        MSDLL rfnm_api_failcode get_tx_timing(struct tx_timing *t);
+        // Mark buf to air its first sample at exactly `tick` (extended ticks, same
+        // domain as rx stamps). Validates slot alignment (256 samples x R); the
+        // kernel enforces the scheduling window (min ~64 slots lead, max ~ring span
+        // ~= 68 ms at 61.44M) and zero-fills any gap, so silence between scheduled
+        // bursts is automatic. Rejects are counted in tx_timing.timed_rejects -
+        // never silent, never mis-timed.
+        MSDLL rfnm_api_failcode tx_buf_schedule(struct tx_buf *buf, uint64_t tick);
 
         MSDLL rfnm_api_failcode apply(uint16_t applies, bool confirm_execution = true, uint32_t timeout_us = 1000000);
 

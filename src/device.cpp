@@ -2673,6 +2673,27 @@ MSDLL void device::get_rx_timing_health(uint64_t *disconts, uint64_t *breaks) {
     if (breaks) *breaks = b;
 }
 
+MSDLL rfnm_api_failcode device::get_tx_timing(struct tx_timing *t) {
+    t->t0 = s->dev_status.tx_t0;
+    t->tick_hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
+    t->r_num = 1u << s->dev_status.tx_r_shift;
+    t->r_den = 2;
+    t->epoch = (uint8_t)(s->dev_status.tx_epoch & 0xFF);
+    t->underruns = s->dev_status.tx_underrun_cnt;
+    t->timed_rejects = s->dev_status.tx_timed_reject_cnt;
+    return s->dev_status.tx_epoch ? RFNM_API_OK : RFNM_API_DQBUF_NO_DATA;
+}
+
+MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tick) {
+    uint64_t ticks_per_slot = 128ull << s->dev_status.tx_r_shift;
+    if (!s->dev_status.tx_epoch || ((tick - s->dev_status.tx_t0) % ticks_per_slot)) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    buf->phytimer = (uint32_t)tick;
+    buf->tx_flags = RFNM_TX_FLAG_TIME_VALID | ((s->dev_status.tx_epoch & 0xFF) << 8);
+    return RFNM_API_OK;
+}
+
 MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks) {
     struct rfnm_dev_tdd r_tdd;
     uint64_t chunk_ticks;
