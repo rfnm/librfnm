@@ -90,6 +90,19 @@ namespace rfnm {
         uint32_t elem_cnt;
     };
 
+    // phytimer phase 2: the RX timing anchor (ticks-first). All ticks are EXTENDED
+    // 64-bit phy timer ticks (the 32-bit counter unwrapped against the received
+    // stream), meaningful within one epoch only. R = r_num/r_den ticks per sample,
+    // exact - there is no tolerance anywhere in this surface.
+    struct rx_timing {
+        uint64_t t0;        // extended tick of the current epoch's first sample
+        uint64_t tick_hz;   // phy timer rate for this clock plan (61.44 MHz canonical)
+        uint32_t r_num;     // ticks per output sample = r_num / r_den
+        uint32_t r_den;
+        uint8_t epoch;      // stream generation; stamps only compare within one
+        uint32_t regates;   // fw lane parks (overrun heals) this epoch
+    };
+
     class rx_buf_compare {
     public:
         bool operator()(struct rx_buf* lra, struct rx_buf* lrb) {
@@ -122,6 +135,13 @@ namespace rfnm {
         bool phytimer_valid[4];
         uint64_t phytimer_discont[4];
         uint64_t phytimer_break[4];
+
+        // phytimer phase 2: 32->64 bit tick extension, tracked at the same ordered
+        // point (packets are monotonic per adc there). ext_high accumulates wraps
+        // since the epoch anchor; ext_last is the newest raw stamp seen.
+        uint64_t ext_high[4];
+        uint32_t ext_last[4];
+        bool ext_valid[4];
     };
 
     struct tx_buf_s {
@@ -165,6 +185,30 @@ namespace rfnm {
         MSDLL static std::vector<struct dev_info> find(enum transport transport, std::string address = "");
 
         MSDLL rfnm_api_failcode get(enum req_type type);
+
+        // ---- phytimer phase 2: ticks-first timing surface ----
+        // Snapshot of the stream ack + clock plan. Valid after an RX apply.
+        MSDLL rfnm_api_failcode get_rx_timing(struct rx_timing *t);
+        // Unwrap a raw 32-bit stamp (rx_buf.phytimer) into extended ticks. Valid for
+        // stamps within ~35 s of the newest dequeued packet, current epoch only.
+        MSDLL uint64_t rx_tick_extend(uint32_t stamp, uint32_t adc_id = 0);
+        // Exact conversions (128-bit internally; ns rounds to nearest).
+        MSDLL uint64_t rx_tick_to_ns(uint64_t ticks);
+        MSDLL uint64_t rx_ns_to_tick(uint64_t ns);
+        // samples -> ticks via R; exact for every plan with r_shift >= 1 (rounds
+        // down half a tick for odd sample counts on the 122.88M full-rate plan)
+        MSDLL uint64_t rx_samples_to_ticks(uint64_t samples);
+        // TDD pattern: gates + frontend flips on one M4 tick grid, sample-exact
+        // stamps, one DISCONT per window boundary. period/duty in TICKS, both must
+        // be multiples of the chunk (768 ADC samples; ticks per chunk from the
+        // clock plan), duty < period, period >= ~4 ms (v1 scheduler floor).
+        // LOCAL transport only in v1.
+        MSDLL rfnm_api_failcode rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks);
+        MSDLL rfnm_api_failcode rx_tdd_stop();
+        // Stamp-chain health since open: clean flagged jumps (window boundaries,
+        // self-heals) vs unflagged breaks (data loss nothing accounted for - any
+        // nonzero break count is a bug somewhere).
+        MSDLL void get_rx_timing_health(uint64_t *disconts, uint64_t *breaks);
 
         MSDLL rfnm_api_failcode apply(uint16_t applies, bool confirm_execution = true, uint32_t timeout_us = 1000000);
 

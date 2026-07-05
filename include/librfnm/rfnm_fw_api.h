@@ -285,7 +285,19 @@ enum rfnm_control_ep {
 	RFNM_GET_LOCAL_MEMINFO,
 	RFNM_SET_SAMP_RATE,
 	RFNM_SET_RX_REPEAT,
+	RFNM_HARD_RESET_LA9310,
+	RFNM_GET_HARD_RESET_STATUS,
+	// phytimer phase 2: configure the M4 TDD scheduler (gates + FE flips on one tick
+	// grid, sample-exact stamps). Payload = struct rfnm_dev_tdd; both zero stops.
+	RFNM_SET_TDD,
 };
+
+RFNM_PACKED_STRUCT(
+	struct rfnm_dev_tdd {
+	uint32_t period_chunks;	// pattern in CHUNKS (768 ADC samples): alignment is structural
+	uint32_t duty_chunks;	// RX-window length; rest of the period = TX/FE-A profile
+}
+);
 
 typedef enum {
 	RFNM_API_OK = 0,
