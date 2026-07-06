@@ -63,6 +63,10 @@ namespace rfnm {
         struct rfnm_dev_status dev_status;
 
         std::chrono::time_point<std::chrono::high_resolution_clock> last_dev_time;
+
+        // get_phytimer() unwrap state for stream-less clients (see the getter's contract)
+        uint64_t ptmr_ext = 0;
+        bool ptmr_ext_valid = false;
     };
 
     struct rx_buf {
@@ -88,6 +92,33 @@ namespace rfnm {
         // multiple of 256 up to the full size. Small packets pace finer (latency), full packets
         // amortize per-transfer costs (throughput) - pick per use case.
         uint32_t elem_cnt;
+    };
+
+    // phytimer phase 2: the RX timing anchor (ticks-first). All ticks are EXTENDED
+    // 64-bit phy timer ticks (the 32-bit counter unwrapped against the received
+    // stream), meaningful within one epoch only. R = r_num/r_den ticks per sample,
+    // exact - there is no tolerance anywhere in this surface.
+    struct rx_timing {
+        uint64_t t0;        // extended tick of the current epoch's first sample
+        uint64_t tick_hz;   // phy timer rate for this clock plan (61.44 MHz canonical)
+        uint32_t r_num;     // ticks per output sample = r_num / r_den
+        uint32_t r_den;
+        uint8_t epoch;      // stream generation; stamps only compare within one
+        uint32_t regates;   // fw lane parks (overrun heals) this epoch
+    };
+
+    // phytimer phase 3: the TX timing anchor. Same tick domain as rx_timing - when
+    // both directions apply together t0 is the SAME minted tick, so "tick T" means
+    // one instant across RX and TX (the timing-advance primitive). Ring slot n airs
+    // at t0 + n*256*(r_num/r_den) ticks; schedule with tx_buf_schedule().
+    struct tx_timing {
+        uint64_t t0;        // tick the DAC gate opened for this epoch (raw 32-bit, zero-extended)
+        uint64_t tick_hz;
+        uint32_t r_num;     // ticks per TX ring sample = r_num / r_den (exact)
+        uint32_t r_den;
+        uint8_t epoch;      // TX stream generation
+        uint32_t underruns;     // fw-side DAC starvation events (anchor-health)
+        uint32_t timed_rejects; // kernel-side scheduled-packet rejects (late/misaligned/rewind)
     };
 
     class rx_buf_compare {
@@ -122,6 +153,13 @@ namespace rfnm {
         bool phytimer_valid[4];
         uint64_t phytimer_discont[4];
         uint64_t phytimer_break[4];
+
+        // phytimer phase 2: 32->64 bit tick extension, tracked at the same ordered
+        // point (packets are monotonic per adc there). ext_high accumulates wraps
+        // since the epoch anchor; ext_last is the newest raw stamp seen.
+        uint64_t ext_high[4];
+        uint32_t ext_last[4];
+        bool ext_valid[4];
     };
 
     struct tx_buf_s {
@@ -165,6 +203,69 @@ namespace rfnm {
         MSDLL static std::vector<struct dev_info> find(enum transport transport, std::string address = "");
 
         MSDLL rfnm_api_failcode get(enum req_type type);
+
+        // ---- phytimer phase 2: ticks-first timing surface ----
+        // Snapshot of the stream ack + clock plan. Valid after an RX apply.
+        MSDLL rfnm_api_failcode get_rx_timing(struct rx_timing *t);
+        // Unwrap a raw 32-bit stamp (rx_buf.phytimer) into extended ticks. Valid for
+        // stamps within ~35 s of the newest dequeued packet, current epoch only.
+        MSDLL uint64_t rx_tick_extend(uint32_t stamp, uint32_t adc_id = 0);
+        // Exact conversions (128-bit internally; ns rounds to nearest).
+        MSDLL uint64_t rx_tick_to_ns(uint64_t ticks);
+        MSDLL uint64_t rx_ns_to_tick(uint64_t ns);
+        // samples -> ticks via R; exact for every plan with r_shift >= 1 (rounds
+        // down half a tick for odd sample counts on the 122.88M full-rate plan)
+        MSDLL uint64_t rx_samples_to_ticks(uint64_t samples);
+        // TDD pattern: gates + frontend flips on one M4 tick grid, sample-exact
+        // stamps, one DISCONT per window boundary. period/duty in TICKS, both must
+        // be multiples of the chunk (768 ADC samples; ticks per chunk from the
+        // clock plan), duty < period, period >= ~4 ms (v1 scheduler floor).
+        // LOCAL transport only in v1.
+        MSDLL rfnm_api_failcode rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks);
+        MSDLL rfnm_api_failcode rx_tdd_stop();
+        // ---- v3 phase 1: the absolute-time request ring (schedule-native) ----
+        // A circular buffer of typed requests, each stamped with the ABSOLUTE tick
+        // at which it executes (same domain as get_phytimer / the RX stamps).
+        // txn_reset() arms the ring (and drops anything queued); txn_push() appends
+        // one entry - entries must be monotonic by tick and >= 250 us ahead. Late
+        // or malformed pushes fail loudly; the device never executes late. Kinds:
+        // 1 = RX_WINDOW (gates open at tick for len samples), 3 = FE profile flip.
+        // Repetition is REFILL: keep pushing occurrences (patterns unroll host-side).
+        // LOCAL transport v1.
+        MSDLL rfnm_api_failcode txn_reset();
+        MSDLL rfnm_api_failcode txn_push(uint64_t tick, uint8_t kind, uint16_t type,
+                uint32_t len_samples, uint8_t flags = 0, uint32_t bind = 0);
+        // seed window 0's {length, gap-after} in chunks so the VSPA stamp counter
+        // starts synced at t0; windows 1+ are pushed and stepped by the M4 walker
+        MSDLL rfnm_api_failcode txn_bootstrap(uint32_t len_chunks, uint32_t gap_chunks);
+        // stage a tone into DAC-ring slots [slot, slot+nslots) for TX_SLOT windows to air
+        MSDLL rfnm_api_failcode tx_fill_tone(uint32_t slot, uint32_t nslots);
+        // Stamp-chain health since open: clean flagged jumps (window boundaries,
+        // self-heals) vs unflagged breaks (data loss nothing accounted for - any
+        // nonzero break count is a bug somewhere).
+        MSDLL void get_rx_timing_health(uint64_t *disconts, uint64_t *breaks);
+
+        // ---- phytimer phase 3: timed TX ----
+        // Snapshot of the TX anchor. Refresh dev_status first (get(REQ_DEV_STATUS))
+        // if no RX stream is running to refresh it for you.
+        MSDLL rfnm_api_failcode get_tx_timing(struct tx_timing *t);
+        // Current board time in extended ticks, NO stream required: the device
+        // captures the phy timer on every dev-status read and this call fetches a
+        // fresh status. Freshness = one status round trip (~ms class; the value is
+        // a true board-side capture, the transit only adds age, never error). Same
+        // tick domain as the RX stamps whenever an RX stream is live; otherwise
+        // self-extended from this handle's first call (call at least once per ~35 s
+        // to keep the unwrap exact). This is the "now" for tx_buf_schedule() -
+        // TX-only clients must NOT open an RX stream just to read the clock (an RX
+        // apply on a TX board steals the shared FE port).
+        MSDLL rfnm_api_failcode get_phytimer(uint64_t *tick);
+        // Mark buf to air its first sample at exactly `tick` (extended ticks, same
+        // domain as rx stamps). Validates slot alignment (256 samples x R); the
+        // kernel enforces the scheduling window (min ~64 slots lead, max ~ring span
+        // ~= 68 ms at 61.44M) and zero-fills any gap, so silence between scheduled
+        // bursts is automatic. Rejects are counted in tx_timing.timed_rejects -
+        // never silent, never mis-timed.
+        MSDLL rfnm_api_failcode tx_buf_schedule(struct tx_buf *buf, uint64_t tick);
 
         MSDLL rfnm_api_failcode apply(uint16_t applies, bool confirm_execution = true, uint32_t timeout_us = 1000000);
 

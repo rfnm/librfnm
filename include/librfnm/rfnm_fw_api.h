@@ -270,6 +270,23 @@ RFNM_PACKED_STRUCT(
 	uint32_t rx_epoch;
 	uint32_t rx_r_shift;
 	uint32_t rx_regate_cnt;
+
+	// phytimer phase 3: TX timing anchor. tx_t0 = tick the DAC gate opens (the SAME
+	// minted tick as rx_t0 when both directions apply together - one timeline); ring
+	// slot n airs at tx_t0 + n*256*R ticks, R = 2^tx_r_shift / 2 exact. tx_epoch
+	// increments per TX stream start. Health: fw DAC starvation + kernel-side timed
+	// placement rejects (misaligned / too-late / too-far / rewind).
+	uint32_t tx_t0;
+	uint32_t tx_epoch;
+	uint32_t tx_r_shift;
+	uint32_t tx_underrun_cnt;
+	uint32_t tx_timed_reject_cnt;
+
+	// phytimer: current tick, captured (C21 spare channel) at every status populate.
+	// Lets any client read board time WITHOUT running an RX stream (an RX apply on a
+	// TX board steals the shared FE port - never require one just to read the clock).
+	// Freshness = one status-fetch round trip; unwrap host-side (32-bit, ~70 s wrap).
+	uint32_t phytimer_now;
 }
 );
 
@@ -285,7 +302,36 @@ enum rfnm_control_ep {
 	RFNM_GET_LOCAL_MEMINFO,
 	RFNM_SET_SAMP_RATE,
 	RFNM_SET_RX_REPEAT,
+	RFNM_HARD_RESET_LA9310,
+	RFNM_GET_HARD_RESET_STATUS,
+	// phytimer phase 2: configure the M4 TDD scheduler (gates + FE flips on one tick
+	// grid, sample-exact stamps). Payload = struct rfnm_dev_tdd; both zero stops.
+	RFNM_SET_TDD,
+	// v3 phase 1: the absolute-time request ring (schedule-native contract).
+	// Payload = struct rfnm_dev_txn; op 0 resets the ring (generation bump), op 1
+	// pushes one entry. Entries carry ABSOLUTE phytimer ticks, monotonic, written
+	// ahead of a per-kind minimum lead; late = rejected loudly. LOCAL v1.
+	RFNM_SET_TXN,
 };
+
+RFNM_PACKED_STRUCT(
+	struct rfnm_dev_tdd {
+	uint32_t period_chunks;	// pattern in CHUNKS (768 ADC samples): alignment is structural
+	uint32_t duty_chunks;	// RX-window length; rest of the period = TX/FE-A profile
+}
+);
+
+RFNM_PACKED_STRUCT(
+	struct rfnm_dev_txn {
+	uint32_t op;	// 0 = reset ring, 1 = push entry
+	uint32_t tick;	// absolute phytimer tick (the entry's identity)
+	uint8_t kind;	// 1 = RX_WINDOW, 2 = TX_SLOT, 3 = FE
+	uint8_t flags;
+	uint16_t type;	// slot-type tag / FE profile index
+	uint32_t len;	// samples
+	uint32_t bind;	// TX: source DAC-ring slot
+}
+);
 
 typedef enum {
 	RFNM_API_OK = 0,

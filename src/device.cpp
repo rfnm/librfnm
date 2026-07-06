@@ -1205,8 +1205,14 @@ void device::threadfn(size_t thread_index) {
                         spdlog::error("TX queue error");
                     }
                     else {
-                        //spdlog::error("tx done");
-                        // got data in lrxbuf
+                        if (getenv("RFNM_DEBUG_RX")) {
+                            static std::atomic<int> dbg_txs{0};
+                            int n = ++dbg_txs;
+                            if (n <= 3 || n % 50 == 0) {
+                                spdlog::info("TXSEND n {} cc {} flags {:x} ptmr {}", n,
+                                    (uint64_t)ltxbuf->usb_cc, (uint32_t)ltxbuf->tx_flags, (uint32_t)ltxbuf->phytimer);
+                            }
+                        }
                     }
                 }
 
@@ -1906,8 +1912,19 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     }
 
     if (abs(((int64_t)dev_last_qbuf) - ((int64_t)rx_s.usb_cc[adc_id])) > max_allowed_in_flight) {
-        spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], static_cast<uint64_t>(dev_last_qbuf));
-        rx_s.usb_cc[adc_id] = dev_last_qbuf;
+        if (dev_last_qbuf > rx_s.usb_cc[adc_id]) {
+            // device counter far AHEAD: consumer lag - jump forward to the head
+            spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], static_cast<uint64_t>(dev_last_qbuf));
+            rx_s.usb_cc[adc_id] = dev_last_qbuf;
+        } else {
+            // device counter far BEHIND: the device-side counter restarted (LA9310
+            // hard reset during a reclock). Pinning expected to the stale head wedges
+            // the stream forever - the new session counts from 1 and the hole-step
+            // logic cannot cross the seam at qsize 1 (the spectrumd boot-loop bug).
+            // Re-anchor on whatever arrives next instead.
+            spdlog::info("device cc counter restarted ({} < expected {}), re-anchoring adc {}", static_cast<uint64_t>(dev_last_qbuf), rx_s.usb_cc[adc_id], adc_id);
+            rx_s.usb_cc[adc_id] = UINT64_MAX;
+        }
     }
 
     //static int stale_high_cnt = 0;
@@ -2097,6 +2114,7 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
         uint8_t pkt_epoch = (uint8_t)RFNM_STREAM_FLAG_EPOCH(lb->rx_flags);
         if (pkt_epoch != (uint8_t)(s->dev_status.rx_epoch & 0xFF)) {
             rx_s.phytimer_valid[a] = false;
+            rx_s.ext_valid[a] = false;
         } else {
             if (!rx_s.phytimer_valid[a] || pkt_epoch != rx_s.phytimer_epoch[a]) {
                 // fresh anchor: first validated packet of this stream generation
@@ -2115,6 +2133,20 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
             rx_s.phytimer_valid[a] = true;
             rx_s.phytimer_epoch[a] = pkt_epoch;
             rx_s.expected_phytimer[a] = lb->phytimer + (uint32_t)(((uint64_t)lb->elem_cnt << s->dev_status.rx_r_shift) >> 1);
+
+            // phase 2: 32->64 tick extension. Packets are usb_cc-ordered here, so raw
+            // stamps are monotonic within an epoch; a backwards step of more than half
+            // the range is a genuine counter wrap (~70 s).
+            if (!rx_s.ext_valid[a]) {
+                rx_s.ext_valid[a] = true;
+                rx_s.ext_high[a] = 0;
+                rx_s.ext_last[a] = lb->phytimer;
+            } else {
+                if (lb->phytimer < rx_s.ext_last[a] && (rx_s.ext_last[a] - lb->phytimer) > 0x80000000u) {
+                    rx_s.ext_high[a] += 0x100000000ull;
+                }
+                rx_s.ext_last[a] = lb->phytimer;
+            }
         }
     }
 
@@ -2148,6 +2180,7 @@ MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
 
         rx_s.usb_cc[adc_id] = UINT64_MAX;
         rx_s.phytimer_valid[adc_id] = false;
+        rx_s.ext_valid[adc_id] = false;
     }
 
     return RFNM_API_OK;
@@ -2268,6 +2301,8 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
         case RFNM_SET_TX_CH_LIST:
         case RFNM_SET_RX_CH_LIST:
         case RFNM_SET_SAMP_RATE:
+        case RFNM_SET_TDD:
+        case RFNM_SET_TXN:
             memcpy(&ep_ctrl_buf[0], buf, size);
             if (ioctl(rfnm_ctrl_ep_ioctl, RFNM_IOCTL_BASE + (0xff & type), &ep_ctrl_buf) < 0) {
                 goto exit_error_local;
@@ -2593,6 +2628,191 @@ MSDLL const struct rfnm_dev_hwinfo* device::get_hwinfo() {
 
 MSDLL const struct rfnm_dev_status* device::get_dev_status() {
     return &(s->dev_status);
+}
+
+// ---- phytimer phase 2: ticks-first timing surface ----
+
+MSDLL rfnm_api_failcode device::get_rx_timing(struct rx_timing *t) {
+    uint32_t r_shift = s->dev_status.rx_r_shift;
+
+    // tick rate = DCS/2; dcs_clk is populated once a stream has programmed the chain
+    t->tick_hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
+    t->r_num = 1u << r_shift;
+    t->r_den = 2;
+    t->epoch = (uint8_t)(s->dev_status.rx_epoch & 0xFF);
+    t->regates = s->dev_status.rx_regate_cnt;
+    // the epoch anchor: extend against the received stream when possible, else raw
+    t->t0 = rx_s.ext_valid[0] ? rx_tick_extend(s->dev_status.rx_t0, 0)
+                              : (uint64_t)s->dev_status.rx_t0;
+    return s->dev_status.rx_epoch ? RFNM_API_OK : RFNM_API_DQBUF_NO_DATA;
+}
+
+MSDLL uint64_t device::rx_tick_extend(uint32_t stamp, uint32_t adc_id) {
+    if (adc_id > 3 || !rx_s.ext_valid[adc_id]) {
+        return stamp;
+    }
+    // signed modular distance from the newest seen stamp: exact within +-35 s
+    int64_t d = (int64_t)(int32_t)(stamp - rx_s.ext_last[adc_id]);
+    return rx_s.ext_high[adc_id] + rx_s.ext_last[adc_id] + d;
+}
+
+MSDLL uint64_t device::rx_tick_to_ns(uint64_t ticks) {
+    uint64_t hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
+    return (uint64_t)(((unsigned __int128)ticks * 1000000000ull + hz / 2) / hz);
+}
+
+MSDLL uint64_t device::rx_ns_to_tick(uint64_t ns) {
+    uint64_t hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
+    return (uint64_t)(((unsigned __int128)ns * hz + 500000000ull) / 1000000000ull);
+}
+
+MSDLL uint64_t device::rx_samples_to_ticks(uint64_t samples) {
+    return (samples << s->dev_status.rx_r_shift) >> 1;
+}
+
+MSDLL void device::get_rx_timing_health(uint64_t *disconts, uint64_t *breaks) {
+    uint64_t d = 0, b = 0;
+    for (int a = 0; a < 4; a++) {
+        d += rx_s.phytimer_discont[a];
+        b += rx_s.phytimer_break[a];
+    }
+    if (disconts) *disconts = d;
+    if (breaks) *breaks = b;
+}
+
+MSDLL rfnm_api_failcode device::get_tx_timing(struct tx_timing *t) {
+    t->t0 = s->dev_status.tx_t0;
+    t->tick_hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
+    t->r_num = 1u << s->dev_status.tx_r_shift;
+    t->r_den = 2;
+    t->epoch = (uint8_t)(s->dev_status.tx_epoch & 0xFF);
+    t->underruns = s->dev_status.tx_underrun_cnt;
+    t->timed_rejects = s->dev_status.tx_timed_reject_cnt;
+    return s->dev_status.tx_epoch ? RFNM_API_OK : RFNM_API_DQBUF_NO_DATA;
+}
+
+MSDLL rfnm_api_failcode device::get_phytimer(uint64_t *tick) {
+    if (get(REQ_DEV_STATUS)) {
+        return RFNM_API_USB_FAIL;
+    }
+    uint32_t raw = s->dev_status.phytimer_now;
+    if (rx_s.ext_valid[0]) {
+        // an RX stream is (or was) live: stay in the stamps' extended domain
+        *tick = rx_tick_extend(raw, 0);
+        return RFNM_API_OK;
+    }
+    // stream-less: unwrap against this handle's previous read (exact within +-35 s)
+    if (s->ptmr_ext_valid) {
+        s->ptmr_ext += (int64_t)(int32_t)(raw - (uint32_t)s->ptmr_ext);
+    } else {
+        s->ptmr_ext = raw;
+        s->ptmr_ext_valid = true;
+    }
+    *tick = s->ptmr_ext;
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tick) {
+    uint64_t ticks_per_slot = 128ull << s->dev_status.tx_r_shift;
+    if (!s->dev_status.tx_epoch || ((tick - s->dev_status.tx_t0) % ticks_per_slot)) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    buf->phytimer = (uint32_t)tick;
+    buf->tx_flags = RFNM_TX_FLAG_TIME_VALID | ((s->dev_status.tx_epoch & 0xFF) << 8);
+    return RFNM_API_OK;
+}
+
+// ---- v3 phase 1: the absolute-time request ring ----
+
+MSDLL rfnm_api_failcode device::txn_reset() {
+    struct rfnm_dev_txn t = {0};
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;  // v1: the verb rides the local ioctl only
+    }
+    t.op = 0;
+    return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
+}
+
+MSDLL rfnm_api_failcode device::txn_push(uint64_t tick, uint8_t kind, uint16_t type,
+        uint32_t len_samples, uint8_t flags, uint32_t bind) {
+    struct rfnm_dev_txn t = {0};
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    t.op = 1;
+    t.tick = (uint32_t)tick;    // device works mod 2^32; extended ticks truncate exactly
+    t.kind = kind;
+    t.flags = flags;
+    t.type = type;
+    t.len = len_samples;
+    t.bind = bind;
+    return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
+}
+
+MSDLL rfnm_api_failcode device::tx_fill_tone(uint32_t slot, uint32_t nslots) {
+    // stage a tone into the DAC ring [slot, slot+nslots) for TX_SLOT windows to air.
+    // Payload loading for the ring TX path (the full tx_qbuf->slot binding is phase 3).
+    struct rfnm_dev_txn t = {0};
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    t.op = 2;
+    t.bind = slot;
+    t.len = nslots;
+    return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
+}
+
+MSDLL rfnm_api_failcode device::txn_bootstrap(uint32_t len_chunks, uint32_t gap_chunks) {
+    // v3 phase 1: seed window 0's shape into the VSPA chunk counter so it starts
+    // synced at the stream anchor t0 (SET_TDD is consumed at the regate parse this
+    // triggers). No 4 ms floor: the periodic M4 rearm task yields to the ring
+    // walker in ring mode, so the sub-4 ms limit does not apply. Call before apply
+    // (or with a ring armed); windows 1+ are pushed and stepped by the walker.
+    struct rfnm_dev_tdd r_tdd;
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    if (!len_chunks || !gap_chunks || (len_chunks + gap_chunks) > 0xFFFF) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    r_tdd.period_chunks = len_chunks + gap_chunks;
+    r_tdd.duty_chunks = len_chunks;
+    return control_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
+}
+
+MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks) {
+    struct rfnm_dev_tdd r_tdd;
+    uint64_t chunk_ticks;
+
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;  // v1: the SET_TDD verb rides the local ioctl only
+    }
+
+    // refresh the clock plan: the chunk length in ticks depends on the ADC divider
+    if (get(REQ_HWINFO)) {
+        return RFNM_API_USB_FAIL;
+    }
+    chunk_ticks = 384ull << s->hwinfo.clock.rx_dcs_div;
+
+    if (!period_ticks || !duty_ticks ||
+            period_ticks % chunk_ticks || duty_ticks % chunk_ticks ||
+            duty_ticks >= period_ticks ||
+            period_ticks / chunk_ticks > 0xFFFF ||
+            period_ticks < 245760ull /* ~4 ms: the v1 M4 rearm floor */) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+
+    r_tdd.period_chunks = (uint32_t)(period_ticks / chunk_ticks);
+    r_tdd.duty_chunks = (uint32_t)(duty_ticks / chunk_ticks);
+    return control_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
+}
+
+MSDLL rfnm_api_failcode device::rx_tdd_stop() {
+    struct rfnm_dev_tdd r_tdd = {0, 0};
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    return control_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
 }
 
 MSDLL const struct transport_status* device::get_transport_status() {
