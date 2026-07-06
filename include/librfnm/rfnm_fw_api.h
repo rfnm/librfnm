@@ -281,6 +281,12 @@ RFNM_PACKED_STRUCT(
 	uint32_t tx_r_shift;
 	uint32_t tx_underrun_cnt;
 	uint32_t tx_timed_reject_cnt;
+
+	// phytimer: current tick, captured (C21 spare channel) at every status populate.
+	// Lets any client read board time WITHOUT running an RX stream (an RX apply on a
+	// TX board steals the shared FE port - never require one just to read the clock).
+	// Freshness = one status-fetch round trip; unwrap host-side (32-bit, ~70 s wrap).
+	uint32_t phytimer_now;
 }
 );
 

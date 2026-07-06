@@ -63,6 +63,10 @@ namespace rfnm {
         struct rfnm_dev_status dev_status;
 
         std::chrono::time_point<std::chrono::high_resolution_clock> last_dev_time;
+
+        // get_phytimer() unwrap state for stream-less clients (see the getter's contract)
+        uint64_t ptmr_ext = 0;
+        bool ptmr_ext_valid = false;
     };
 
     struct rx_buf {
@@ -228,6 +232,16 @@ namespace rfnm {
         // Snapshot of the TX anchor. Refresh dev_status first (get(REQ_DEV_STATUS))
         // if no RX stream is running to refresh it for you.
         MSDLL rfnm_api_failcode get_tx_timing(struct tx_timing *t);
+        // Current board time in extended ticks, NO stream required: the device
+        // captures the phy timer on every dev-status read and this call fetches a
+        // fresh status. Freshness = one status round trip (~ms class; the value is
+        // a true board-side capture, the transit only adds age, never error). Same
+        // tick domain as the RX stamps whenever an RX stream is live; otherwise
+        // self-extended from this handle's first call (call at least once per ~35 s
+        // to keep the unwrap exact). This is the "now" for tx_buf_schedule() -
+        // TX-only clients must NOT open an RX stream just to read the clock (an RX
+        // apply on a TX board steals the shared FE port).
+        MSDLL rfnm_api_failcode get_phytimer(uint64_t *tick);
         // Mark buf to air its first sample at exactly `tick` (extended ticks, same
         // domain as rx stamps). Validates slot alignment (256 samples x R); the
         // kernel enforces the scheduling window (min ~64 slots lead, max ~ring span

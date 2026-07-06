@@ -1205,8 +1205,14 @@ void device::threadfn(size_t thread_index) {
                         spdlog::error("TX queue error");
                     }
                     else {
-                        //spdlog::error("tx done");
-                        // got data in lrxbuf
+                        if (getenv("RFNM_DEBUG_RX")) {
+                            static std::atomic<int> dbg_txs{0};
+                            int n = ++dbg_txs;
+                            if (n <= 3 || n % 50 == 0) {
+                                spdlog::info("TXSEND n {} cc {} flags {:x} ptmr {}", n,
+                                    (uint64_t)ltxbuf->usb_cc, (uint32_t)ltxbuf->tx_flags, (uint32_t)ltxbuf->phytimer);
+                            }
+                        }
                     }
                 }
 
@@ -2682,6 +2688,27 @@ MSDLL rfnm_api_failcode device::get_tx_timing(struct tx_timing *t) {
     t->underruns = s->dev_status.tx_underrun_cnt;
     t->timed_rejects = s->dev_status.tx_timed_reject_cnt;
     return s->dev_status.tx_epoch ? RFNM_API_OK : RFNM_API_DQBUF_NO_DATA;
+}
+
+MSDLL rfnm_api_failcode device::get_phytimer(uint64_t *tick) {
+    if (get(REQ_DEV_STATUS)) {
+        return RFNM_API_USB_FAIL;
+    }
+    uint32_t raw = s->dev_status.phytimer_now;
+    if (rx_s.ext_valid[0]) {
+        // an RX stream is (or was) live: stay in the stamps' extended domain
+        *tick = rx_tick_extend(raw, 0);
+        return RFNM_API_OK;
+    }
+    // stream-less: unwrap against this handle's previous read (exact within +-35 s)
+    if (s->ptmr_ext_valid) {
+        s->ptmr_ext += (int64_t)(int32_t)(raw - (uint32_t)s->ptmr_ext);
+    } else {
+        s->ptmr_ext = raw;
+        s->ptmr_ext_valid = true;
+    }
+    *tick = s->ptmr_ext;
+    return RFNM_API_OK;
 }
 
 MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tick) {
