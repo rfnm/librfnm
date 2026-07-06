@@ -235,6 +235,9 @@ namespace rfnm {
         MSDLL rfnm_api_failcode txn_reset();
         MSDLL rfnm_api_failcode txn_push(uint64_t tick, uint8_t kind, uint16_t type,
                 uint32_t len_samples, uint8_t flags = 0, uint32_t bind = 0);
+        // seed window 0's {length, gap-after} in chunks so the VSPA stamp counter
+        // starts synced at t0; windows 1+ are pushed and stepped by the M4 walker
+        MSDLL rfnm_api_failcode txn_bootstrap(uint32_t len_chunks, uint32_t gap_chunks);
         // Stamp-chain health since open: clean flagged jumps (window boundaries,
         // self-heals) vs unflagged breaks (data loss nothing accounted for - any
         // nonzero break count is a bug somewhere).

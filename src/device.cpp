@@ -2749,6 +2749,24 @@ MSDLL rfnm_api_failcode device::txn_push(uint64_t tick, uint8_t kind, uint16_t t
     return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
 }
 
+MSDLL rfnm_api_failcode device::txn_bootstrap(uint32_t len_chunks, uint32_t gap_chunks) {
+    // v3 phase 1: seed window 0's shape into the VSPA chunk counter so it starts
+    // synced at the stream anchor t0 (SET_TDD is consumed at the regate parse this
+    // triggers). No 4 ms floor: the periodic M4 rearm task yields to the ring
+    // walker in ring mode, so the sub-4 ms limit does not apply. Call before apply
+    // (or with a ring armed); windows 1+ are pushed and stepped by the walker.
+    struct rfnm_dev_tdd r_tdd;
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    if (!len_chunks || !gap_chunks || (len_chunks + gap_chunks) > 0xFFFF) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    r_tdd.period_chunks = len_chunks + gap_chunks;
+    r_tdd.duty_chunks = len_chunks;
+    return control_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
+}
+
 MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks) {
     struct rfnm_dev_tdd r_tdd;
     uint64_t chunk_ticks;
