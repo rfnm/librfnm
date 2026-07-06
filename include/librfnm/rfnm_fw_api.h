@@ -307,12 +307,29 @@ enum rfnm_control_ep {
 	// phytimer phase 2: configure the M4 TDD scheduler (gates + FE flips on one tick
 	// grid, sample-exact stamps). Payload = struct rfnm_dev_tdd; both zero stops.
 	RFNM_SET_TDD,
+	// v3 phase 1: the absolute-time request ring (schedule-native contract).
+	// Payload = struct rfnm_dev_txn; op 0 resets the ring (generation bump), op 1
+	// pushes one entry. Entries carry ABSOLUTE phytimer ticks, monotonic, written
+	// ahead of a per-kind minimum lead; late = rejected loudly. LOCAL v1.
+	RFNM_SET_TXN,
 };
 
 RFNM_PACKED_STRUCT(
 	struct rfnm_dev_tdd {
 	uint32_t period_chunks;	// pattern in CHUNKS (768 ADC samples): alignment is structural
 	uint32_t duty_chunks;	// RX-window length; rest of the period = TX/FE-A profile
+}
+);
+
+RFNM_PACKED_STRUCT(
+	struct rfnm_dev_txn {
+	uint32_t op;	// 0 = reset ring, 1 = push entry
+	uint32_t tick;	// absolute phytimer tick (the entry's identity)
+	uint8_t kind;	// 1 = RX_WINDOW, 2 = TX_SLOT, 3 = FE
+	uint8_t flags;
+	uint16_t type;	// slot-type tag / FE profile index
+	uint32_t len;	// samples
+	uint32_t bind;	// TX: source DAC-ring slot
 }
 );
 

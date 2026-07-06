@@ -2302,6 +2302,7 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
         case RFNM_SET_RX_CH_LIST:
         case RFNM_SET_SAMP_RATE:
         case RFNM_SET_TDD:
+        case RFNM_SET_TXN:
             memcpy(&ep_ctrl_buf[0], buf, size);
             if (ioctl(rfnm_ctrl_ep_ioctl, RFNM_IOCTL_BASE + (0xff & type), &ep_ctrl_buf) < 0) {
                 goto exit_error_local;
@@ -2719,6 +2720,33 @@ MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tic
     buf->phytimer = (uint32_t)tick;
     buf->tx_flags = RFNM_TX_FLAG_TIME_VALID | ((s->dev_status.tx_epoch & 0xFF) << 8);
     return RFNM_API_OK;
+}
+
+// ---- v3 phase 1: the absolute-time request ring ----
+
+MSDLL rfnm_api_failcode device::txn_reset() {
+    struct rfnm_dev_txn t = {0};
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;  // v1: the verb rides the local ioctl only
+    }
+    t.op = 0;
+    return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
+}
+
+MSDLL rfnm_api_failcode device::txn_push(uint64_t tick, uint8_t kind, uint16_t type,
+        uint32_t len_samples, uint8_t flags, uint32_t bind) {
+    struct rfnm_dev_txn t = {0};
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    t.op = 1;
+    t.tick = (uint32_t)tick;    // device works mod 2^32; extended ticks truncate exactly
+    t.kind = kind;
+    t.flags = flags;
+    t.type = type;
+    t.len = len_samples;
+    t.bind = bind;
+    return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
 }
 
 MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks) {
