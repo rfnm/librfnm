@@ -225,6 +225,12 @@ namespace rfnm {
         MSDLL rfnm_api_failcode rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids = 0, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode rx_flush(uint32_t timeout_us = 20000, uint8_t ch_ids = 0xFF);
         MSDLL rfnm_api_failcode set_rx_channel_status(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = false);
+        // Force off every RX channel the device reports enabled (stale channels from a
+        // killed client block stream creation; the mask names only enabled channels so
+        // device-side apply validation passes). Call after open, before configuring your
+        // own channels. Not automatic in rx_stream::start(): it would tear down channels
+        // a concurrent stream on this device object is using.
+        MSDLL rfnm_api_failcode rx_disable_stale_channels(uint32_t timeout_us = 20000000);
 
         // Low level TX stream API
         MSDLL rfnm_api_failcode tx_work_start(enum tx_latency_policy policy = TX_LATENCY_POLICY_DEFAULT);

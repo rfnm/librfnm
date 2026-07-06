@@ -2635,6 +2635,37 @@ MSDLL rfnm_api_failcode device::set_rx_channel_status(uint32_t channel, enum rfn
     }
 }
 
+// Force off every RX channel the device reports enabled - recovery from a client
+// that died without cleanup, whose stale enabled channels block new stream creation.
+// The apply mask names only those channels: the device validates every channel named
+// in a mask, and the untouched defaults of a never-configured channel fail that
+// validation. Deliberately NOT called from rx_stream::start(): a second stream on the
+// same device object would tear down channels the first one is using - call it after
+// open, before staging your own channel configuration.
+MSDLL rfnm_api_failcode device::rx_disable_stale_channels(uint32_t timeout_us) {
+    rfnm_api_failcode ret = get(REQ_RX);
+    if (ret != RFNM_API_OK) {
+        return ret;
+    }
+
+    uint16_t applies = 0;
+    for (uint32_t channel = 0; channel < MAX_RX_CHANNELS; channel++) {
+        if (!is_rx_channel_available(channel)) {
+            continue;
+        }
+        if (s->rx.ch[channel].enable != RFNM_CH_RF_OFF) {
+            s->rx.ch[channel].enable = RFNM_CH_RF_OFF;
+            s->rx.ch[channel].stream = RFNM_CH_STREAM_AUTO;
+            applies |= rx_channel_apply_flags[channel];
+        }
+    }
+
+    if (!applies) {
+        return RFNM_API_OK;
+    }
+    return apply(applies, true, timeout_us);
+}
+
 /*
 MSDLL rfnm_api_failcode device::set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply) {
     if (channel < MAX_RX_CHANNELS) {
