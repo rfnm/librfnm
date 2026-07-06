@@ -2749,6 +2749,19 @@ MSDLL rfnm_api_failcode device::txn_push(uint64_t tick, uint8_t kind, uint16_t t
     return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
 }
 
+MSDLL rfnm_api_failcode device::tx_fill_tone(uint32_t slot, uint32_t nslots) {
+    // stage a tone into the DAC ring [slot, slot+nslots) for TX_SLOT windows to air.
+    // Payload loading for the ring TX path (the full tx_qbuf->slot binding is phase 3).
+    struct rfnm_dev_txn t = {0};
+    if (s->transport_status.transport != TRANSPORT_LOCAL) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    t.op = 2;
+    t.bind = slot;
+    t.len = nslots;
+    return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
+}
+
 MSDLL rfnm_api_failcode device::txn_bootstrap(uint32_t len_chunks, uint32_t gap_chunks) {
     // v3 phase 1: seed window 0's shape into the VSPA chunk counter so it starts
     // synced at the stream anchor t0 (SET_TDD is consumed at the regate parse this

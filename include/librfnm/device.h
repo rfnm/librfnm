@@ -238,6 +238,8 @@ namespace rfnm {
         // seed window 0's {length, gap-after} in chunks so the VSPA stamp counter
         // starts synced at t0; windows 1+ are pushed and stepped by the M4 walker
         MSDLL rfnm_api_failcode txn_bootstrap(uint32_t len_chunks, uint32_t gap_chunks);
+        // stage a tone into DAC-ring slots [slot, slot+nslots) for TX_SLOT windows to air
+        MSDLL rfnm_api_failcode tx_fill_tone(uint32_t slot, uint32_t nslots);
         // Stamp-chain health since open: clean flagged jumps (window boundaries,
         // self-heals) vs unflagged breaks (data loss nothing accounted for - any
         // nonzero break count is a bug somewhere).
