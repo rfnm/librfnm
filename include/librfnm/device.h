@@ -41,6 +41,14 @@ namespace rfnm {
         enum stream_format tx_stream_format;
         int boost_pp_tx;
         int boost_pp_rx;
+        // USB RX dead-pipe watchdog telemetry. rx_dead_pipe_resync_cnt counts SET_INTERFACE
+        // resyncs actually fired since open - every one rebuilt the endpoints and may have
+        // destroyed in-flight packets, so any nonzero count during a session that should be
+        // healthy is a real transport fault. rx_gap_suppressed_cnt counts silence episodes
+        // on gated/scheduled sessions that the watchdog judged as honest device idle (the
+        // device shipped nothing) and deliberately did NOT resync - benign, diagnostic only.
+        uint32_t rx_dead_pipe_resync_cnt;
+        uint32_t rx_gap_suppressed_cnt;
     };
 
     // one discovered device, as returned by device::find(). Pass transport and address
@@ -424,6 +432,19 @@ namespace rfnm {
         std::atomic<bool> tcp_data_connected{ false };
 
         std::atomic<bool> usb_shutdown{ false };
+
+        // The client armed a gated/scheduled RX session (rx_tdd_configure or a schedule_rx
+        // push): bulk-IN silence between windows is legitimate, so the USB RX dead-pipe
+        // watchdog must judge the pipe by the device's published ship counters instead of
+        // a flat silence timeout (see the watchdog in threadfn). Sticky for the device
+        // lifetime by design: clearing it (e.g. on rx_tdd_stop) while ring windows are
+        // still pending would re-open the spurious-resync window this exists to close,
+        // and a scheduled-capable client keeps real-wedge recovery through the counter
+        // check either way.
+        std::atomic<bool> rx_scheduled_session{ false };
+        // bumped by rx_work_start when the workers (re)activate: tells the USB RX engine
+        // to re-arm its dead-pipe watchdog baselines for the new session
+        std::atomic<uint32_t> rx_work_generation{ 0 };
 
 
         

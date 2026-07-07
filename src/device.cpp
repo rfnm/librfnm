@@ -845,15 +845,105 @@ void device::threadfn(size_t thread_index) {
                 int got_ep = -1;
                 static thread_local int rx_reap_rr = 0;
                 static thread_local auto rx_last_progress = std::chrono::high_resolution_clock::now();
+                // dead-pipe watchdog state: ship-ccs already accounted for (adopted at session
+                // arm, written off after every resync), the dead-pipe confirmation window, and
+                // the once-per-episode benign-gap bookkeeping
+                static thread_local uint64_t wd_qbuf_acked[4] = {};
+                static thread_local uint32_t wd_generation = 0;
+                static thread_local bool wd_dead_pending = false;
+                static thread_local bool wd_gap_counted = false;
+                static thread_local std::chrono::high_resolution_clock::time_point wd_dead_since;
                 auto rx_tstart = std::chrono::high_resolution_clock::now();
-                // UDC stall recovery, host-driven: if no completion for 2 s while URBs
-                // are pending, the gadget's UDC has stopped mapping requests to TRBs (a
+                if (wd_generation != rx_work_generation) {
+                    // new rx session: re-arm. The progress baseline must not carry a previous
+                    // session's age (a stale one fired a phantom resync on the first pass of a
+                    // restarted session), and the accounted ship-ccs adopt the device's CURRENT
+                    // counters - usb_adc_last_qbuf is monotonic across stream restarts (module
+                    // lifetime), so a pre-session value must never read as undelivered packets.
+                    std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
+                    for (int adc_id = 0; adc_id < 4; adc_id++) {
+                        wd_qbuf_acked[adc_id] = s->dev_status.usb_adc_last_qbuf[adc_id];
+                    }
+                    wd_generation = rx_work_generation;
+                    wd_dead_pending = false;
+                    wd_gap_counted = false;
+                    rx_last_progress = rx_tstart;
+                }
+                // UDC stall recovery, host-driven: if the pipe is dead while URBs are
+                // pending, the gadget's UDC has stopped mapping requests to TRBs (a
                 // dwc3 lost-event class bug). SET_INTERFACE re-runs the gadget's set_alt
                 // (full endpoint re-arm + request requeue device-side) AND resets the
                 // host xHCI endpoint state - the only recovery that resyncs BOTH sides
                 // (device-only re-arm desyncs SS sequence state; session re-open works
                 // for the same reason this does).
+                //
+                // "dead" is NOT just "silent": on a gated/scheduled session (rx_tdd_configure /
+                // schedule_rx armed) the pipe is legitimately silent between windows, and a flat
+                // silence timeout fired a spurious resync every 2 s - each set_alt tearing down
+                // the device's armed requests (-ESHUTDOWN) and destroying in-flight window data.
+                // For those sessions the judge is the device-published ship position: the module
+                // stamps every packet it stages for USB with a ship-time cc and publishes it as
+                // dev_status.usb_adc_last_qbuf (worker-polled at read_dev_status on this very
+                // thread, so it is fresh even while the bulk pipe is silent). During host-side
+                // silence
+                //   qbuf == accounted -> the device shipped nothing: silence is honest, wait
+                //   qbuf >  accounted -> the device shipped packets we never received: dead
+                // where accounted = max(newest cc received, session-arm/post-resync baseline).
+                // A wedge can't hide from this: the device's stale-consumer stage gate still
+                // ships up to its stale depth cap into a dead pipe, advancing qbuf. The mismatch
+                // must persist for 500 ms before firing so a window landing right at the 2 s
+                // deadline gets reaped, not resynced. Continuous sessions keep the flat 2 s
+                // backstop unchanged (a resync there is cheap and possibly the only way out).
+                bool rx_pipe_dead = false;
                 if (std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - rx_last_progress).count() > 2000) {
+                    if (!rx_scheduled_session) {
+                        rx_pipe_dead = true;
+                    } else {
+                        uint64_t qbuf_now[4];
+                        bool status_fresh;
+                        {
+                            std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
+                            for (int adc_id = 0; adc_id < 4; adc_id++) {
+                                qbuf_now[adc_id] = s->dev_status.usb_adc_last_qbuf[adc_id];
+                            }
+                            status_fresh = std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - s->last_dev_time).count() < 500;
+                        }
+                        int dead_adc = -1;
+                        for (int adc_id = 0; adc_id < 4; adc_id++) {
+                            uint64_t accounted = rx_s.usb_cc_max_seen[adc_id] > wd_qbuf_acked[adc_id] ? rx_s.usb_cc_max_seen[adc_id] : wd_qbuf_acked[adc_id];
+                            if (qbuf_now[adc_id] > accounted) {
+                                dead_adc = adc_id;
+                            }
+                        }
+                        if (!status_fresh) {
+                            // stale counters (control-path hiccup, no status refresh for 500 ms):
+                            // can't judge the pipe either way - defer to the next pass
+                        } else if (dead_adc >= 0) {
+                            if (!wd_dead_pending) {
+                                wd_dead_pending = true;
+                                wd_dead_since = rx_tstart;
+                            } else if (std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - wd_dead_since).count() > 500) {
+                                spdlog::warn("RX pipe dead in scheduled session: adc {} device shipped cc {} but host got {} (acked {})",
+                                    dead_adc, qbuf_now[dead_adc], rx_s.usb_cc_max_seen[dead_adc], wd_qbuf_acked[dead_adc]);
+                                rx_pipe_dead = true;
+                            }
+                        } else {
+                            wd_dead_pending = false;
+                            if (!wd_gap_counted) {
+                                // honest inter-window silence: suppressed exactly where the flat
+                                // timeout used to fire spuriously. Counted once per episode.
+                                wd_gap_counted = true;
+                                s->transport_status.rx_gap_suppressed_cnt++;
+                                spdlog::debug("RX watchdog: scheduled-session gap >2s, device idle (qbuf {} {} {} {}), resync suppressed",
+                                    qbuf_now[0], qbuf_now[1], qbuf_now[2], qbuf_now[3]);
+                            }
+                        }
+                    }
+                } else {
+                    wd_dead_pending = false;
+                    wd_gap_counted = false;
+                }
+                if (rx_pipe_dead) {
                     spdlog::warn("RX pipeline dead 2s: SET_INTERFACE resync");
                     for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
                         for (int q = 0; q < RFNM_RX_ASYNC_URBS_PER_EP; q++) {
@@ -882,6 +972,17 @@ void device::threadfn(size_t thread_index) {
                         }
                         arz.next_reap[e] = 0;
                     }
+                    // write off everything staged up to now: the cancel/set_alt teardown just
+                    // discarded any in-flight packets, and their ccs must not read as a dead
+                    // pipe again on the next silent stretch
+                    {
+                        std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
+                        for (int adc_id = 0; adc_id < 4; adc_id++) {
+                            wd_qbuf_acked[adc_id] = s->dev_status.usb_adc_last_qbuf[adc_id];
+                        }
+                    }
+                    s->transport_status.rx_dead_pipe_resync_cnt++;
+                    wd_dead_pending = false;
                     rx_reap_rr = 0;
                     rx_last_progress = std::chrono::high_resolution_clock::now();
                 }
@@ -1841,6 +1942,10 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
         rx_s.usb_cc_max_seen[adc_id] = 0;
         rx_s.delivered_cc_valid[adc_id] = false;
     }
+
+    // tell the USB RX engine to re-arm its dead-pipe watchdog baselines for the new
+    // session (bumped before the workers wake so the first RX pass sees the new gen)
+    rx_work_generation++;
 
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
@@ -3030,7 +3135,14 @@ MSDLL rfnm_api_failcode device::schedule_ctl(uint64_t tick, uint8_t kind, uint16
     t.type = type;
     t.len = len_samples;
     t.bind = bind;
-    return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
+    rfnm_api_failcode ret = control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
+    if (ret == RFNM_API_OK && kind == 1) {
+        // an RX window is scheduled: from here on bulk-IN silence between windows is
+        // legitimate and the RX dead-pipe watchdog must judge by the device's ship
+        // counters (sticky - see rx_scheduled_session in device.h)
+        rx_scheduled_session = true;
+    }
+    return ret;
 }
 
 MSDLL rfnm_api_failcode device::schedule_rx(uint64_t tick, uint32_t len_samples, uint16_t tag) {
@@ -3060,7 +3172,13 @@ MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t
 
     r_tdd.period_chunks = (uint32_t)(period_ticks / chunk_ticks);
     r_tdd.duty_chunks = (uint32_t)(duty_ticks / chunk_ticks);
-    return control_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
+    rfnm_api_failcode ret = control_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
+    if (ret == RFNM_API_OK) {
+        // TDD gating armed: the pipe is legitimately silent outside the RX duty window
+        // (sticky - see rx_scheduled_session in device.h)
+        rx_scheduled_session = true;
+    }
+    return ret;
 }
 
 MSDLL rfnm_api_failcode device::rx_tdd_stop() {
