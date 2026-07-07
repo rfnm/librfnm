@@ -27,6 +27,15 @@ namespace rfnm {
 struct rfnm::_usb_handle {
     libusb_device_handle* primary{};
     libusb_device_handle* boost{};
+    // Dedicated context + second handle to the SAME device for the sync control verbs.
+    // On the shared default context a sync control transfer from a non-worker thread is
+    // parked on libusb's event-waiters condvar behind the streaming workers' event loop,
+    // and since libusb 1.0.24 that condvar is only signalled by libusb_unlock_events()
+    // (end of an event-handler pass) - so every verb's latency rides the workers' poll
+    // quanta and thread hand-offs instead of the wire. A private context has no competing
+    // event handler: the calling thread polls its own fd and wakes on its own completion.
+    libusb_context* ctrl_ctx{};
+    libusb_device_handle* ctrl{};
 };
 
 MSDLL device::device(enum transport transport, std::string address, enum debug_level dbg) {
@@ -199,6 +208,53 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
                 }
             }
 
+            // Open the dedicated control-transfer handle (see _usb_handle): a second usbfs
+            // open of the same device in a private context, matched by bus + address so a
+            // multi-board host can't cross-wire boards. All control verbs are vendor
+            // requests with recipient DEVICE, so no interface claim is needed (the data
+            // interface claim on primary is exclusive and must not be duplicated). On any
+            // failure fall back to primary - functionally identical, but control-verb
+            // latency then couples to the streaming workers' event loop again (the 8-40 ms
+            // SET_TXN push stalls seen on gated/windowed sessions while the RX pipe is
+            // silent), so warn instead of failing the open. This must stay AFTER the last
+            // goto ep0_retry / goto next above: the primary is now fully accepted (serial
+            // matched, ep0 proven live), so the recovery paths - which reset the device and
+            // change its address - can never run with a ctrl handle open, and the bus+address
+            // match below can't go stale or leak across a retry_open pass.
+#if LIBUSB_API_VERSION >= 0x0100010A
+            r = libusb_init_context(&usb_handle->ctrl_ctx, nullptr, 0);
+#else
+            r = libusb_init(&usb_handle->ctrl_ctx);
+#endif
+            if (r == 0) {
+                libusb_device* pdev = libusb_get_device(usb_handle->primary);
+                uint8_t pbus = libusb_get_bus_number(pdev);
+                uint8_t paddr = libusb_get_device_address(pdev);
+                libusb_device** clist = nullptr;
+                ssize_t ccnt = libusb_get_device_list(usb_handle->ctrl_ctx, &clist);
+                for (ssize_t ci = 0; ci < ccnt; ci++) {
+                    if (libusb_get_bus_number(clist[ci]) == pbus && libusb_get_device_address(clist[ci]) == paddr) {
+                        if (libusb_open(clist[ci], &usb_handle->ctrl)) {
+                            usb_handle->ctrl = nullptr;
+                        }
+                        break;
+                    }
+                }
+                if (ccnt >= 0) {
+                    libusb_free_device_list(clist, 1);
+                }
+                if (!usb_handle->ctrl) {
+                    libusb_exit(usb_handle->ctrl_ctx);
+                    usb_handle->ctrl_ctx = nullptr;
+                }
+            }
+            else {
+                usb_handle->ctrl_ctx = nullptr;
+            }
+            if (!usb_handle->ctrl) {
+                spdlog::warn("Couldn't open the dedicated control handle; control verbs will share the streaming event loop");
+            }
+
             libusb_free_device_list(devs, 1);
 
             for (int8_t i = 0; i < THREAD_COUNT; i++) {
@@ -269,6 +325,14 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
             }
 
         next:
+            if (usb_handle->ctrl) {
+                libusb_close(usb_handle->ctrl);
+                usb_handle->ctrl = nullptr;
+            }
+            if (usb_handle->ctrl_ctx) {
+                libusb_exit(usb_handle->ctrl_ctx);
+                usb_handle->ctrl_ctx = nullptr;
+            }
             if (usb_handle->primary) {
                 libusb_release_interface(usb_handle->primary, 0);
                 libusb_close(usb_handle->primary);
@@ -504,6 +568,12 @@ MSDLL device::~device() {
         
 
 
+        if (usb_handle && usb_handle->ctrl) {
+            libusb_close(usb_handle->ctrl);
+        }
+        if (usb_handle && usb_handle->ctrl_ctx) {
+            libusb_exit(usb_handle->ctrl_ctx);
+        }
         if (usb_handle && usb_handle->primary) {
             libusb_release_interface(usb_handle->primary, 0);
             libusb_close(usb_handle->primary);
@@ -2456,8 +2526,15 @@ MSDLL rfnm_api_failcode device::tx_dqbuf(struct tx_buf** buf) {
 }
 
 MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint32_t size, uint8_t* buf, uint32_t timeout_ms) {
-    uint32_t r = -1;
+    // int, not uint32_t: libusb returns negative error codes, and the unsigned compare
+    // below was tautologically false - every USB control-transfer failure (timeouts
+    // included) silently returned RFNM_API_OK with a stale reply buffer
+    int r = -1;
     if (s->transport_status.transport == TRANSPORT_USB) {
+        // prefer the dedicated control handle/context (see _usb_handle): on the shared
+        // default context these sync transfers park behind the streaming workers' event
+        // loop and inherit its poll-quantum + hand-off latency
+        libusb_device_handle* ctrl_handle = usb_handle->ctrl ? usb_handle->ctrl : usb_handle->primary;
         switch (type) {
         case RFNM_GET_DEV_HWINFO:
         case RFNM_GET_TX_CH_LIST:
@@ -2466,7 +2543,7 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
         case RFNM_GET_DEV_STATUS:
         case RFNM_GET_SM_RESET:
         case RFNM_GET_LOCAL_MEMINFO:
-            r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
+            r = libusb_control_transfer(ctrl_handle, uint8_t(LIBUSB_ENDPOINT_IN) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 type, 0, (unsigned char*)buf, size, timeout_ms);
             break;
         case RFNM_SET_TX_CH_LIST:
@@ -2474,7 +2551,7 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
         case RFNM_SET_SAMP_RATE:
         case RFNM_SET_TDD:
         case RFNM_SET_TXN:
-            r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
+            r = libusb_control_transfer(ctrl_handle, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 type, 0, (unsigned char*)buf, size, timeout_ms);
             break;
         }
