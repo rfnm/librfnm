@@ -17,6 +17,13 @@
 
 using namespace rfnm;
 
+// File-local helper; forward-declared here (not in the public header) so that
+// external consumers including <librfnm/device.h> under -Werror=unused-function
+// are not tripped by an internal-linkage declaration they never define.
+namespace rfnm {
+    static std::vector<std::string> get_broadcast_addresses();
+}
+
 struct rfnm::_usb_handle {
     libusb_device_handle* primary{};
     libusb_device_handle* boost{};
@@ -1945,7 +1952,15 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         // dqbuf entirely (the inflight reset jumps expected forward while old packets are
         // still in flight; the late arrival then starves the stream in a tight no-data
         // spin - the full-duplex USB collapse cycle). Far-NEWER tops keep the > 1 guard.
-        if (buf->usb_cc < rx_s.usb_cc[adc_id] || (queue_size > 1 && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN))) {
+        // EXCEPT a far-newer top carrying RFNM_RX_FLAG_DISCONT: that is a deliberate seam
+        // (a re-gated scheduled window, or a kernel catch-up drop), not a reorder artifact.
+        // Discarding it stalled scheduled/gapped capture whose windows sit >RX_RECOMB_BUF_LEN
+        // past the last cc; leave it at the top so the DISCONT-adopt path below takes it now
+        // (the freshness contract). Continuous streams only see this on a real discontinuity,
+        // where adopting immediately is already the intended behaviour.
+        bool far_newer = queue_size > 1 && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN) &&
+                !(buf->rx_flags & RFNM_RX_FLAG_DISCONT);
+        if (buf->usb_cc < rx_s.usb_cc[adc_id] || far_newer) {
 
             /*if (discarded.empty() && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN)) {
                 stale_high_cnt++;

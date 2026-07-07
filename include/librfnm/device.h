@@ -442,5 +442,4 @@ namespace rfnm {
     };
 
     std::string compute_broadcast_address(const std::string& ip_str, const std::string& mask_str);
-    static std::vector<std::string> get_broadcast_addresses();
 }
