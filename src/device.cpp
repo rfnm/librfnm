@@ -212,6 +212,10 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
         libusb_free_device_list(devs, 1);
         libusb_exit(NULL);
         delete usb_handle;
+        // null it so the exit_eth cleanup below doesn't double-free it on the FIND path
+        // (FIND falls through from here to LOCAL/TCP; a plain USB open keeps s and usb_handle
+        // until it either succeeds or every transport is exhausted at exit_eth)
+        usb_handle = nullptr;
 
         if (transport != TRANSPORT_FIND) {
             delete s;
@@ -376,6 +380,13 @@ exit_local:
         }
     }
 exit_eth:
+    // The constructor threw, so ~device() never runs: free the two raw allocations made at
+    // entry (s at line ~42, usb_handle at ~43). The USB-only path frees them before its own
+    // throw; LOCAL/TCP/exhausted-FIND all reach here, and without this leak s (~2.8 KB) and
+    // usb_handle on every no-device open. usb_handle is null on the FIND path (freed above).
+    // The smart-pointer socket/io_context members clean themselves up as the object unwinds.
+    delete usb_handle;
+    delete s;
     throw std::runtime_error("Couldn't find any RFNM device");
 }
 
