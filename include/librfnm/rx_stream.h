@@ -25,6 +25,9 @@ namespace rfnm {
     private:
         rfnm_api_failcode rx_dqbuf_multi(uint32_t timeout_us, bool first = false);
         void rx_qbuf_multi();
+        rfnm_api_failcode align_channels(bool initial);
+        uint64_t ticks_of_samples(uint64_t samples);
+        uint64_t pending_head_stamp_ext(uint32_t channel);
 
         device &dev;
 
@@ -35,10 +38,18 @@ namespace rfnm {
         struct rx_buf * pending_rx_buf[MAX_RX_CHANNELS] = {};
         uint32_t samples_left[MAX_RX_CHANNELS] = {};
 
-        int64_t sample_counter = 0;
-        uint32_t last_phytimer[MAX_RX_CHANNELS] = {};
-        double ns_per_sample;
-        uint32_t phytimer_ticks_per_sample;
+        // stamp-derived stream timeline (exact; replaces the old fabricated
+        // sample-counter clock): t0_ext anchors sample 0, pos_samples is the next
+        // sample to deliver, next_stamp_ext chains per-channel contiguity. A chain
+        // mismatch marks gap_pending; read() finishes short and the next read()
+        // realigns every channel on the stamps and jumps the timeline truthfully.
+        struct rx_timing timing = {};
+        bool timing_valid = false;
+        uint64_t t0_ext = 0;
+        uint64_t pos_samples = 0;
+        uint64_t next_stamp_ext[MAX_RX_CHANNELS] = {};
+        bool gap_pending = false;
+        double ns_fallback = 0;
 
         bool dc_correction[MAX_RX_CHANNELS] = {false};
         union quad_dc_offset dc_offsets[MAX_RX_CHANNELS] = {};
