@@ -144,6 +144,16 @@ namespace rfnm {
         uint64_t usb_cc_dropped[4];
         uint64_t usb_cc_ok[4];
 
+        // freshest cc received per adc (maintained at the worker push). The consumer-lag
+        // clamp jumps to this - the newest packet we HOLD - never to the device's producer
+        // counter, which on a lossless transport runs ahead of data still in the pipe.
+        uint64_t usb_cc_max_seen[4];
+
+        // cc of the last DELIVERED packet per adc: a delivered-cc seam marks a transport
+        // hole already accounted in usb_cc_dropped, so its stamp jump is not a "break"
+        uint64_t delivered_cc[4];
+        bool delivered_cc_valid[4];
+
         // phytimer phase 1 stamp-chain validation at the ordered dqbuf point: expected =
         // previous packet's stamp + elem_cnt x R. A break without a DISCONT/epoch resync
         // is a protocol error (phytimer_break); a flagged one is a clean device self-heal
@@ -381,6 +391,7 @@ namespace rfnm {
 
         MSDLL int single_ch_id_bitmap_to_adc_id(uint8_t ch_ids);
         MSDLL void dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock);
+        void dqbuf_overwrite_cc_locked(uint8_t adc_id);
         MSDLL int dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock);
         MSDLL void reorder_tx_queue_nolock(tx_buf_s &tx_s);
 

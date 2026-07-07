@@ -974,6 +974,9 @@ void device::threadfn(size_t thread_index) {
             {
                 std::lock_guard<std::mutex> lockGuard(rx_s.out_mutex);
                 rx_s.out[lrxbuf->adc_id].push(buf);
+                if (buf->usb_cc > rx_s.usb_cc_max_seen[lrxbuf->adc_id]) {
+                    rx_s.usb_cc_max_seen[lrxbuf->adc_id] = buf->usb_cc;
+                }
 
                 //if (rx_s.out[lrxbuf->adc_id].size() > 50) {
                 rx_s.cv.notify_one();
@@ -1692,6 +1695,8 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
     // expected CC of UINT64_MAX is a special value meaning to accept whatever comes
     for (int adc_id = 0; adc_id < 4; adc_id++) {
         rx_s.usb_cc[adc_id] = UINT64_MAX;
+        rx_s.usb_cc_max_seen[adc_id] = 0;
+        rx_s.delivered_cc_valid[adc_id] = false;
     }
 
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
@@ -1829,10 +1834,10 @@ MSDLL int device::single_ch_id_bitmap_to_adc_id(uint8_t ch_ids) {
     return -1;
 }
 
-MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
-    if (acquire_lock) {
-        rx_s.out_mutex.lock();
-    }
+// core of the cc adoption; caller MUST hold out_mutex. A single lock-held decision point:
+// the old unlock-then-relock flow let the queue top change between the adoption decision
+// and the adoption itself.
+void device::dqbuf_overwrite_cc_locked(uint8_t adc_id) {
     rx_s.in_mutex.lock();
 
     uint64_t old_cc = rx_s.usb_cc[adc_id];
@@ -1847,15 +1852,10 @@ MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
     }
 
     rx_s.in_mutex.unlock();
-    if (acquire_lock) {
-        rx_s.out_mutex.unlock();
-    }
 
     if (rx_s.usb_cc[adc_id] > old_cc) {
         rx_s.usb_cc_dropped[adc_id] += (rx_s.usb_cc[adc_id] - old_cc);
     }
-
-
 
     // saturation produces thousands of drop events per second - rate-limit the log
     // (counters keep accumulating) and report drops as a share of all packets
@@ -1869,6 +1869,16 @@ MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
             old_cc, rx_s.usb_cc[adc_id], queue_size, adc_id, static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[adc_id]),
             rx_s.usb_cc_ok[adc_id], rx_s.usb_cc_dropped[adc_id],
             total_cc > 0 ? (100.0 * rx_s.usb_cc_dropped[adc_id] / total_cc) : 0);
+    }
+}
+
+MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
+    if (acquire_lock) {
+        rx_s.out_mutex.lock();
+    }
+    dqbuf_overwrite_cc_locked(adc_id);
+    if (acquire_lock) {
+        rx_s.out_mutex.unlock();
     }
 }
 
@@ -1902,6 +1912,11 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
 
     buf = rx_s.out[adc_id].top();
 
+    // stamps and flags only mean something within the CURRENT stream generation; a stale
+    // session's leftovers (the dwc3 gadget re-delivers them at USB stream head) carry the
+    // previous epoch and must never anchor, adopt, or survive the reorder on trust
+    uint8_t cur_epoch = (uint8_t)(s->dev_status.rx_epoch & 0xFF);
+
     // special case for first buffer of stream
     if (rx_s.usb_cc[adc_id] == UINT64_MAX) {
         int ret = 0;
@@ -1909,8 +1924,25 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             spdlog::info("CCINIT adc {} queue_size {}", adc_id, queue_size);
         }
 
-        // wait for at least 10 buffers to come in case they are out-of-order
-        if (queue_size >= 10) {
+        // never anchor on a stale generation: cull old-epoch leftovers first (they would
+        // otherwise count toward - or win - the anchor and hijack the fresh session)
+        while (queue_size > 0 && (uint8_t)RFNM_STREAM_FLAG_EPOCH(buf->rx_flags) != cur_epoch) {
+            std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
+            rx_s.out[adc_id].pop();
+            rx_s.in.push(buf);
+            rx_s.cv.notify_one();
+            queue_size--;
+            if (queue_size == 0) {
+                break;
+            }
+            buf = rx_s.out[adc_id].top();
+        }
+
+        // anchor once 10 buffers arrived (out-of-order safety), or immediately on a
+        // current-epoch DISCONT top: the flagged packet IS the first packet after a seam
+        // (stream start, window start), so it is a true anchor by definition - sparse
+        // scheduled captures and slow full-record streams never accumulate 10
+        if (queue_size >= 10 || (queue_size > 0 && (buf->rx_flags & RFNM_RX_FLAG_DISCONT))) {
             rx_s.usb_cc[adc_id] = buf->usb_cc;
             //spdlog::info("initial cc {} adc {}", rx_s.usb_cc[adc_id], adc_id);
             ret = 1;
@@ -1936,17 +1968,38 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
 
     if (abs(((int64_t)dev_last_qbuf) - ((int64_t)rx_s.usb_cc[adc_id])) > max_allowed_in_flight) {
         if (dev_last_qbuf > rx_s.usb_cc[adc_id]) {
-            // device counter far AHEAD: consumer lag - jump forward to the head
-            spdlog::info("max allowed inflight exceeded, reset cc from {} to {}", rx_s.usb_cc[adc_id], static_cast<uint64_t>(dev_last_qbuf));
-            rx_s.usb_cc[adc_id] = dev_last_qbuf;
+            // device counter far AHEAD: consumer lag. Jump to the freshest packet we
+            // actually HOLD, not the device's producer counter: on a lossless transport
+            // (TCP) the producer counter runs ahead of data still queued in the socket,
+            // and jumping past it culled every arriving packet forever - a slow consumer
+            // starved into a silent dead stream (0.02 Msps and no accounting at 61.44M).
+            // Jumping to the held head keeps the stream live at the consumer's pace and
+            // bounds staleness by the transport pipeline depth. The skipped span is
+            // accounted - the freshness contract's "you may lose samples, counted".
+            uint64_t jump_to = rx_s.usb_cc_max_seen[adc_id];
+            if (jump_to > dev_last_qbuf) {
+                jump_to = dev_last_qbuf;    // never trust a held cc past the producer (stale-session garbage)
+            }
+            if (jump_to > rx_s.usb_cc[adc_id]) {
+                spdlog::info("max allowed inflight exceeded, reset cc from {} to {} (dev head {})",
+                    rx_s.usb_cc[adc_id], jump_to, static_cast<uint64_t>(dev_last_qbuf));
+                rx_s.usb_cc_dropped[adc_id] += jump_to - rx_s.usb_cc[adc_id];
+                rx_s.usb_cc[adc_id] = jump_to;
+            }
         } else {
             // device counter far BEHIND: the device-side counter restarted (LA9310
             // hard reset during a reclock). Pinning expected to the stale head wedges
             // the stream forever - the new session counts from 1 and the hole-step
             // logic cannot cross the seam at qsize 1 (the spectrumd boot-loop bug).
-            // Re-anchor on whatever arrives next instead.
+            // Re-anchor on whatever arrives next instead. Return now: with expected at
+            // UINT64_MAX the discard loop below would drain the new session's queue.
             spdlog::info("device cc counter restarted ({} < expected {}), re-anchoring adc {}", static_cast<uint64_t>(dev_last_qbuf), rx_s.usb_cc[adc_id], adc_id);
             rx_s.usb_cc[adc_id] = UINT64_MAX;
+            rx_s.usb_cc_max_seen[adc_id] = 0;
+            if (acquire_lock) {
+                rx_s.out_mutex.unlock();
+            }
+            return 0;
         }
     }
 
@@ -1968,9 +2021,11 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         // Discarding it stalled scheduled/gapped capture whose windows sit >RX_RECOMB_BUF_LEN
         // past the last cc; leave it at the top so the DISCONT-adopt path below takes it now
         // (the freshness contract). Continuous streams only see this on a real discontinuity,
-        // where adopting immediately is already the intended behaviour.
+        // where adopting immediately is already the intended behaviour. The flag is only
+        // trusted from the CURRENT epoch - a stale session's flagged leftover must not
+        // survive the cull just to hijack the cc numbering downstream.
         bool far_newer = queue_size > 1 && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN) &&
-                !(buf->rx_flags & RFNM_RX_FLAG_DISCONT);
+                !((buf->rx_flags & RFNM_RX_FLAG_DISCONT) && (uint8_t)RFNM_STREAM_FLAG_EPOCH(buf->rx_flags) == cur_epoch);
         if (buf->usb_cc < rx_s.usb_cc[adc_id] || far_newer) {
 
             /*if (discarded.empty() && buf->usb_cc > (rx_s.usb_cc[adc_id] + RX_RECOMB_BUF_LEN)) {
@@ -2027,41 +2082,47 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         spdlog::info("stale adc {} cc {} qin {} qout {}: [{}]", adc_id, rx_s.usb_cc[adc_id], qin, qout, list);
     }
 
-    if (acquire_lock) {
-        rx_s.out_mutex.unlock();
-    }
-
     if (rx_s.usb_cc[adc_id] == buf->usb_cc) {
-        rx_s.usb_cc_ok[adc_id]++;
+        if (acquire_lock) {
+            rx_s.out_mutex.unlock();
+        }
         return 1;
     }
     else {
         if (getenv("RFNM_DEBUG_RX") && buf->usb_cc != rx_s.usb_cc[adc_id]) {
-        static int dbg_throttle;
-        if (++dbg_throttle % 50 == 1) {
-            spdlog::info("NOTCONT adc {} top_cc {} expected {} qsize {}", adc_id, buf->usb_cc, rx_s.usb_cc[adc_id], queue_size);
+            static int dbg_throttle;
+            if (++dbg_throttle % 50 == 1) {
+                spdlog::info("NOTCONT adc {} top_cc {} expected {} qsize {}", adc_id, buf->usb_cc, rx_s.usb_cc[adc_id], queue_size);
+            }
         }
-    }
-    // A FLAGGED discontinuity is an EXPECTED hole - the device re-gated, or the
+        // A FLAGGED discontinuity is an EXPECTED hole - the device re-gated, or the
         // kernel dropped a backlog to catch up and marked the seam. The missing ccs
         // will never arrive: adopt the top packet's numbering NOW. Waiting out the
         // reorder timeout per hole turned a lagging stream into a seconds-stale
         // trickle (the freshness contract: you may lose samples under lag, you never
         // silently get stale ones - usb_cc_dropped and the stamps carry the truth).
-        if (buf->rx_flags & RFNM_RX_FLAG_DISCONT) {
-            dqbuf_overwrite_cc(adc_id, acquire_lock);
-            return 0;
+        // Trusted from the current epoch only, decided and applied under one lock
+        // hold (the top must not change between decision and adoption), and the
+        // adopted top is deliverable right now - report it as continuous.
+        int adopted = 0;
+        if ((buf->rx_flags & RFNM_RX_FLAG_DISCONT) && (uint8_t)RFNM_STREAM_FLAG_EPOCH(buf->rx_flags) == cur_epoch) {
+            dqbuf_overwrite_cc_locked(adc_id);
+            adopted = 1;
         }
-    // A hole at the queue head with a healthy backlog behind it means the expected
+        // A hole at the queue head with a healthy backlog behind it means the expected
         // packet was lost in transit, not reordered (at most MAX_THREAD_COUNT reads are
         // in flight): step over it now. Gating this on RX_RECOMB_BUF_LEN hoarded ~200 ms
         // of stream behind a packet that would never arrive - under full-duplex USB,
         // where occasional single-packet losses are real, that became a stall/discard
         // cycle that collapsed the whole stream. usb_cc_dropped accounts for the holes.
-        if (queue_size > 16) {
-            dqbuf_overwrite_cc(adc_id, acquire_lock);
+        else if (queue_size > 16) {
+            dqbuf_overwrite_cc_locked(adc_id);
+            adopted = 1;
         }
-        return 0;
+        if (acquire_lock) {
+            rx_s.out_mutex.unlock();
+        }
+        return adopted;
     }
 }
 
@@ -2117,6 +2178,17 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
                 [this, required_adc_id] { return dqbuf_is_cc_continuous(required_adc_id, 0) ||
                 rx_s.out[required_adc_id].size() > RX_RECOMB_BUF_LEN; }
             );
+
+            // timeout-expiry anchor: an unanchored cc after a full client timeout means the
+            // init window will never fill (sparse scheduled capture, or a slow full-record
+            // stream whose 10-buffer wait costs hundreds of ms) - whatever is queued is all
+            // there is. Anchor on the lowest queued cc; anything still in flight below it
+            // is bounded by the pipeline depth and gets culled as stale, accounted.
+            if (rx_s.usb_cc[required_adc_id] == UINT64_MAX && rx_s.out[required_adc_id].size() > 0) {
+                rx_s.usb_cc[required_adc_id] = rx_s.out[required_adc_id].top()->usb_cc;
+                spdlog::info("cc init anchor on timeout: adc {} cc {} qsize {}", required_adc_id,
+                    rx_s.usb_cc[required_adc_id], rx_s.out[required_adc_id].size());
+            }
         }
 
         if (!dqbuf_is_cc_continuous(required_adc_id, 1)) {
@@ -2145,6 +2217,11 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
 
     rx_s.usb_cc[required_adc_id]++;
 
+    // exactly one ok tick per DELIVERED packet. This used to live in
+    // dqbuf_is_cc_continuous, which the cv wait predicate re-evaluates - every waited
+    // packet double-counted and the drop percentage read half its true value.
+    rx_s.usb_cc_ok[required_adc_id]++;
+
     // phytimer phase 1: stamp-chain validation at the ordered pop point (packets are in
     // usb_cc order per adc here). Engages only when the packet's epoch matches the cached
     // stream ack in dev_status, so rate-change windows and stale-prefix drains can never
@@ -2152,6 +2229,11 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
     // re-anchors after every event so one break is one count, not a storm.
     {
         int a = required_adc_id;
+        // a delivered-cc seam means the transport hole is already accounted in
+        // usb_cc_dropped - the stamp jump that comes with it is NOT a silent break
+        bool cc_seam = rx_s.delivered_cc_valid[a] && lb->usb_cc != rx_s.delivered_cc[a] + 1;
+        rx_s.delivered_cc[a] = lb->usb_cc;
+        rx_s.delivered_cc_valid[a] = true;
         uint8_t pkt_epoch = (uint8_t)RFNM_STREAM_FLAG_EPOCH(lb->rx_flags);
         if (pkt_epoch != (uint8_t)(s->dev_status.rx_epoch & 0xFF)) {
             rx_s.phytimer_valid[a] = false;
@@ -2162,9 +2244,13 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
             } else if (lb->rx_flags & RFNM_RX_FLAG_DISCONT) {
                 // clean device self-heal re-gate: the stamp jump is flagged and stays exact
                 rx_s.phytimer_discont[a]++;
+            } else if (cc_seam) {
+                // stamp jump across a transport hole: usb_cc_dropped already carries this
+                // loss; counting it as a break too made get_rx_timing_health's "any break
+                // is a bug" contract impossible to hold on a saturated link. Re-anchor.
             } else if (lb->phytimer != rx_s.expected_phytimer[a]) {
-                // silent chain break: samples were lost somewhere nothing flagged (or a
-                // transport drop already counted by usb_cc - layered counters by design)
+                // silent chain break: samples were lost somewhere nothing flagged and
+                // nothing counted - a genuine protocol error
                 rx_s.phytimer_break[a]++;
                 if (rx_s.phytimer_break[a] <= 10 || (rx_s.phytimer_break[a] % 1000) == 0) {
                     spdlog::warn("phytimer chain break #{} adc {}: got {} expected {} (usb_cc {})",
@@ -2220,6 +2306,8 @@ MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
         }
 
         rx_s.usb_cc[adc_id] = UINT64_MAX;
+        rx_s.usb_cc_max_seen[adc_id] = 0;
+        rx_s.delivered_cc_valid[adc_id] = false;
         rx_s.phytimer_valid[adc_id] = false;
         rx_s.ext_valid[adc_id] = false;
     }
@@ -2508,6 +2596,8 @@ MSDLL void device::reset_device_state() {
         rx_s.usb_cc[adc_id] = UINT64_MAX;
         rx_s.usb_cc_dropped[adc_id] = 0;
         rx_s.usb_cc_ok[adc_id] = 0;
+        rx_s.usb_cc_max_seen[adc_id] = 0;
+        rx_s.delivered_cc_valid[adc_id] = false;
     }
 }
 
