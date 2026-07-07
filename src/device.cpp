@@ -45,6 +45,7 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
     int cnt = 0;
     int dev_cnt = 0;
     int r;
+    int open_attempt = 0;
     std::vector<struct rfnm_dev_hwinfo> found;
     libusb_device** devs = NULL;
 
@@ -69,6 +70,9 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
         }
 
         for (int d = 0; d < dev_cnt; d++) {
+            open_attempt = 0;
+
+        retry_open:
             struct libusb_device_descriptor desc;
             int r = libusb_get_device_descriptor(devs[d], &desc);
             if (r < 0) {
@@ -78,6 +82,16 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
 
             if (desc.idVendor != RFNM_USB_VID || desc.idProduct != RFNM_USB_PID) {
                 goto next;
+            }
+
+            // RFNM_USB_BUS_ONLY=<n>: probe only devices on one usb bus. Multi-board bench
+            // safety: open-path kill tests (and the reset-recovery below) must not be able
+            // to touch another board even at the descriptor-read stage.
+            {
+                const char* bus_only = getenv("RFNM_USB_BUS_ONLY");
+                if (bus_only && libusb_get_bus_number(devs[d]) != (uint8_t)atoi(bus_only)) {
+                    goto next;
+                }
             }
 
             r = libusb_open(devs[d], &usb_handle->primary);
@@ -97,7 +111,7 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
                 }
                 else {
                     spdlog::error("Couldn't read serial descr");
-                    goto next;
+                    goto ep0_retry;
                 }
             }
 
@@ -168,15 +182,21 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
                 RFNM_B_REQUEST, RFNM_GET_SM_RESET, 0, NULL, 0, 500);
             if (r < 0) {
                 spdlog::error("Couldn't reset state machine");
-                goto next;
+                goto ep0_retry;
             }
             reset_device_state();
 
             s->transport_status.transport = TRANSPORT_USB;
             THREAD_COUNT = MAX_THREAD_COUNT;
 
-            if (get(REQ_ALL)) {
-                goto next;
+            {
+                rfnm_api_failcode gr = get(REQ_ALL);
+                if (gr == RFNM_API_USB_FAIL) {
+                    goto ep0_retry;
+                }
+                if (gr) {
+                    goto next;
+                }
             }
 
             libusb_free_device_list(devs, 1);
@@ -194,6 +214,59 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
 
             // Success
             return;
+
+        ep0_retry:
+            // A host client killed mid-control-transfer can strand the gadget's ep0: every later open-path
+            // control transfer on this device fails until a usb port reset. Reset the device currently being
+            // probed (never any other) and retry the open sequence once; on a second failure give up as before.
+            if (open_attempt++) {
+                spdlog::error("Open-path control transfer failed again after usb reset, giving up on this device");
+                goto next;
+            }
+            {
+                uint8_t bus = libusb_get_bus_number(devs[d]);
+                uint8_t ports[8] = { 0 };
+                int port_depth = libusb_get_port_numbers(devs[d], ports, sizeof(ports));
+                spdlog::info("Open-path control transfer failed, resetting usb device at bus {} port {} and retrying once", bus, port_depth > 0 ? ports[port_depth - 1] : 0);
+                libusb_release_interface(usb_handle->primary, 0);
+                r = libusb_reset_device(usb_handle->primary);
+                libusb_close(usb_handle->primary);
+                usb_handle->primary = NULL;
+                if (r == 0) {
+                    goto retry_open;
+                }
+                if (r != LIBUSB_ERROR_NOT_FOUND && r != LIBUSB_ERROR_NO_DEVICE) {
+                    spdlog::error("usb reset failed, {}", libusb_strerror((libusb_error)r));
+                    goto next;
+                }
+                // The reset made the device re-enumerate, so the old libusb_device is stale. Re-scan for the
+                // same physical device by bus + port path: the serial may have been unreadable pre-reset, so
+                // identity is keyed on topology, not on the serial string.
+                for (int scan = 0; scan < 10; scan++) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    libusb_free_device_list(devs, 1);
+                    devs = NULL;
+                    dev_cnt = libusb_get_device_list(NULL, &devs);
+                    for (int nd = 0; nd < dev_cnt; nd++) {
+                        struct libusb_device_descriptor ndesc;
+                        uint8_t cports[8] = { 0 };
+                        if (libusb_get_device_descriptor(devs[nd], &ndesc)) {
+                            continue;
+                        }
+                        if (ndesc.idVendor != RFNM_USB_VID || ndesc.idProduct != RFNM_USB_PID) {
+                            continue;
+                        }
+                        if (libusb_get_bus_number(devs[nd]) != bus || libusb_get_port_numbers(devs[nd], cports, sizeof(cports)) != port_depth ||
+                            memcmp(ports, cports, port_depth > 0 ? port_depth : 0)) {
+                            continue;
+                        }
+                        d = nd;
+                        goto retry_open;
+                    }
+                }
+                spdlog::error("usb device did not come back after reset");
+                goto next;
+            }
 
         next:
             if (usb_handle->primary) {
