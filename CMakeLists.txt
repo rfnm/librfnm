@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.13)
-project(librfnm VERSION 0.2.1)
+project(librfnm VERSION 0.3.0)
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo

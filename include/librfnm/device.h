@@ -223,23 +223,20 @@ namespace rfnm {
         // LOCAL transport only in v1.
         MSDLL rfnm_api_failcode rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks);
         MSDLL rfnm_api_failcode rx_tdd_stop();
-        // ---- v3 phase 1: the absolute-time request ring (schedule-native) ----
-        // A circular buffer of typed requests, each stamped with the ABSOLUTE tick
-        // at which it executes (same domain as get_phytimer / the RX stamps).
-        // txn_reset() arms the ring (and drops anything queued); txn_push() appends
-        // one entry - entries must be monotonic by tick and >= 250 us ahead. Late
-        // or malformed pushes fail loudly; the device never executes late. Kinds:
-        // 1 = RX_WINDOW (gates open at tick for len samples), 3 = FE profile flip.
-        // Repetition is REFILL: keep pushing occurrences (patterns unroll host-side).
-        // LOCAL transport v1.
-        MSDLL rfnm_api_failcode txn_reset();
-        MSDLL rfnm_api_failcode txn_push(uint64_t tick, uint8_t kind, uint16_t type,
+        // ---- v3: absolute-time scheduling (transport-general) ----
+        // Requests are stamped with the ABSOLUTE phytimer tick at which they execute
+        // (same domain as get_phytimer / the RX stamps), monotonic by tick, >= 150 us
+        // ahead. Late or malformed requests fail loudly; the device never executes
+        // late. Repetition is REFILL: keep pushing occurrences (patterns unroll
+        // host-side). schedule_reset() drops everything queued. TX is scheduled by
+        // writing TIME_VALID data packets (tx_qbuf with tx_flags/phytimer set) - the
+        // packet IS the schedule; the device's request ring is internal.
+        MSDLL rfnm_api_failcode schedule_reset();
+        MSDLL rfnm_api_failcode schedule_rx(uint64_t tick, uint32_t len_samples, uint16_t tag = 0);
+        // low-level escape hatch (bench tools, future FE flips): kind 1 = RX window,
+        // 2 = TX slot window (internal payload binding), 3 = FE profile flip
+        MSDLL rfnm_api_failcode schedule_ctl(uint64_t tick, uint8_t kind, uint16_t type,
                 uint32_t len_samples, uint8_t flags = 0, uint32_t bind = 0);
-        // seed window 0's {length, gap-after} in chunks so the VSPA stamp counter
-        // starts synced at t0; windows 1+ are pushed and stepped by the M4 walker
-        MSDLL rfnm_api_failcode txn_bootstrap(uint32_t len_chunks, uint32_t gap_chunks);
-        // stage a tone into DAC-ring slots [slot, slot+nslots) for TX_SLOT windows to air
-        MSDLL rfnm_api_failcode tx_fill_tone(uint32_t slot, uint32_t nslots);
         // Stamp-chain health since open: clean flagged jumps (window boundaries,
         // self-heals) vs unflagged breaks (data loss nothing accounted for - any
         // nonzero break count is a bug somewhere).

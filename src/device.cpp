@@ -792,9 +792,14 @@ void device::threadfn(size_t thread_index) {
                 // The transfer may also arrive PADDED past the declared payload (full-size
                 // wire transfer carrying a partial packet) - accept any transfer that contains
                 // at least the declared payload with a valid head; reject short/garbage ones.
+                // Fillers are EXPECTED, not errors: ZLPs (the gadget's alt-set pre-queue and
+                // its flushmode drain both send zero-length requests) and, from older device
+                // firmware, full-size zero URBs (magic 0) - recycle those silently.
                 if (lrxbuf->magic != 0x7ab8bd6f || lrxbuf->elem_cnt > RFNM_USB_RX_PACKET_ELEM_CNT ||
                         (size_t)transferred < RFNM_USB_RX_PACKET_HEAD_SIZE + (size_t)lrxbuf->elem_cnt * 3) {
-                    spdlog::error("thread loop RX usb wrong size, {}, ep {}, elem_cnt {}, magic {:x}", transferred, tpm.ep_id, (uint32_t)lrxbuf->elem_cnt, (uint32_t)lrxbuf->magic);
+                    if (transferred != 0 && !(lrxbuf->magic == 0 && lrxbuf->elem_cnt == 0)) {
+                        spdlog::error("thread loop RX usb wrong size, {}, ep {}, elem_cnt {}, magic {:x}", transferred, tpm.ep_id, (uint32_t)lrxbuf->elem_cnt, (uint32_t)lrxbuf->magic);
+                    }
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
                     rx_s.cv.notify_one();
@@ -2270,6 +2275,8 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
         case RFNM_SET_TX_CH_LIST:
         case RFNM_SET_RX_CH_LIST:
         case RFNM_SET_SAMP_RATE:
+        case RFNM_SET_TDD:
+        case RFNM_SET_TXN:
             r = libusb_control_transfer(usb_handle->primary, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 type, 0, (unsigned char*)buf, size, timeout_ms);
             break;
@@ -2333,6 +2340,8 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
             case RFNM_SET_TX_CH_LIST:
             case RFNM_SET_RX_CH_LIST:
             case RFNM_SET_SAMP_RATE:
+            case RFNM_SET_TDD:
+            case RFNM_SET_TXN:
                 /* SET commands: send header + data */
                 header.size = size;
 
@@ -2724,21 +2733,20 @@ MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tic
 
 // ---- v3 phase 1: the absolute-time request ring ----
 
-MSDLL rfnm_api_failcode device::txn_reset() {
+MSDLL rfnm_api_failcode device::schedule_reset() {
     struct rfnm_dev_txn t = {0};
-    if (s->transport_status.transport != TRANSPORT_LOCAL) {
-        return RFNM_API_NOT_SUPPORTED;  // v1: the verb rides the local ioctl only
-    }
+    // v3: the schedule request rides the control channel on every transport
+    // (USB ep0 / TCP ctrl socket / LOCAL ioctl) - no transport gate.
     t.op = 0;
     return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
 }
 
-MSDLL rfnm_api_failcode device::txn_push(uint64_t tick, uint8_t kind, uint16_t type,
+MSDLL rfnm_api_failcode device::schedule_ctl(uint64_t tick, uint8_t kind, uint16_t type,
         uint32_t len_samples, uint8_t flags, uint32_t bind) {
+    // low-level scheduled-request escape hatch (bench tools, future FE flips). The
+    // device's request ring is an internal scheduler, not a client concept: apps
+    // schedule RX with schedule_rx() and TX by writing TIME_VALID data packets.
     struct rfnm_dev_txn t = {0};
-    if (s->transport_status.transport != TRANSPORT_LOCAL) {
-        return RFNM_API_NOT_SUPPORTED;
-    }
     t.op = 1;
     t.tick = (uint32_t)tick;    // device works mod 2^32; extended ticks truncate exactly
     t.kind = kind;
@@ -2749,44 +2757,16 @@ MSDLL rfnm_api_failcode device::txn_push(uint64_t tick, uint8_t kind, uint16_t t
     return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
 }
 
-MSDLL rfnm_api_failcode device::tx_fill_tone(uint32_t slot, uint32_t nslots) {
-    // stage a tone into the DAC ring [slot, slot+nslots) for TX_SLOT windows to air.
-    // Payload loading for the ring TX path (the full tx_qbuf->slot binding is phase 3).
-    struct rfnm_dev_txn t = {0};
-    if (s->transport_status.transport != TRANSPORT_LOCAL) {
-        return RFNM_API_NOT_SUPPORTED;
-    }
-    t.op = 2;
-    t.bind = slot;
-    t.len = nslots;
-    return control_transfer(RFNM_SET_TXN, sizeof(struct rfnm_dev_txn), (unsigned char *)&t, 50);
-}
-
-MSDLL rfnm_api_failcode device::txn_bootstrap(uint32_t len_chunks, uint32_t gap_chunks) {
-    // v3 phase 1: seed window 0's shape into the VSPA chunk counter so it starts
-    // synced at the stream anchor t0 (SET_TDD is consumed at the regate parse this
-    // triggers). No 4 ms floor: the periodic M4 rearm task yields to the ring
-    // walker in ring mode, so the sub-4 ms limit does not apply. Call before apply
-    // (or with a ring armed); windows 1+ are pushed and stepped by the walker.
-    struct rfnm_dev_tdd r_tdd;
-    if (s->transport_status.transport != TRANSPORT_LOCAL) {
-        return RFNM_API_NOT_SUPPORTED;
-    }
-    if (!len_chunks || !gap_chunks || (len_chunks + gap_chunks) > 0xFFFF) {
-        return RFNM_API_NOT_SUPPORTED;
-    }
-    r_tdd.period_chunks = len_chunks + gap_chunks;
-    r_tdd.duty_chunks = len_chunks;
-    return control_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
+MSDLL rfnm_api_failcode device::schedule_rx(uint64_t tick, uint32_t len_samples, uint16_t tag) {
+    // capture len_samples starting at the absolute phytimer tick (sample resolution).
+    // Fire-and-forget on remote transports: schedule health is read back via the
+    // dev_status counters, arrivals via the stamped RX packets themselves.
+    return schedule_ctl(tick, 1 /* RX window */, tag, len_samples, 0, 0);
 }
 
 MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks) {
     struct rfnm_dev_tdd r_tdd;
     uint64_t chunk_ticks;
-
-    if (s->transport_status.transport != TRANSPORT_LOCAL) {
-        return RFNM_API_NOT_SUPPORTED;  // v1: the SET_TDD verb rides the local ioctl only
-    }
 
     // refresh the clock plan: the chunk length in ticks depends on the ADC divider
     if (get(REQ_HWINFO)) {
@@ -2809,9 +2789,6 @@ MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t
 
 MSDLL rfnm_api_failcode device::rx_tdd_stop() {
     struct rfnm_dev_tdd r_tdd = {0, 0};
-    if (s->transport_status.transport != TRANSPORT_LOCAL) {
-        return RFNM_API_NOT_SUPPORTED;
-    }
     return control_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
 }
 
