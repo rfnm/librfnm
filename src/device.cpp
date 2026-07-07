@@ -2016,6 +2016,16 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             spdlog::info("NOTCONT adc {} top_cc {} expected {} qsize {}", adc_id, buf->usb_cc, rx_s.usb_cc[adc_id], queue_size);
         }
     }
+    // A FLAGGED discontinuity is an EXPECTED hole - the device re-gated, or the
+        // kernel dropped a backlog to catch up and marked the seam. The missing ccs
+        // will never arrive: adopt the top packet's numbering NOW. Waiting out the
+        // reorder timeout per hole turned a lagging stream into a seconds-stale
+        // trickle (the freshness contract: you may lose samples under lag, you never
+        // silently get stale ones - usb_cc_dropped and the stamps carry the truth).
+        if (buf->rx_flags & RFNM_RX_FLAG_DISCONT) {
+            dqbuf_overwrite_cc(adc_id, acquire_lock);
+            return 0;
+        }
     // A hole at the queue head with a healthy backlog behind it means the expected
         // packet was lost in transit, not reordered (at most MAX_THREAD_COUNT reads are
         // in flight): step over it now. Gating this on RX_RECOMB_BUF_LEN hoarded ~200 ms
