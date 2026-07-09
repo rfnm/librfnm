@@ -1829,7 +1829,10 @@ exit_local:
                 }
 
                 spdlog::info("Add Network device: {}", (char*)r_hwinfo.motherboard.serial_number);
-                found.push_back({ TRANSPORT_TCP, sender_addr, r_hwinfo });
+                // For a directed probe keep the address the caller reached the device at: the
+                // reply's source address is whatever the device kernel picked for the route
+                // (e.g. a DHCP lease next to the statically pinned address) and may not be stable
+                found.push_back({ TRANSPORT_TCP, address.length() ? address : sender_addr, r_hwinfo });
 
                 // A directed probe can only ever get one reply
                 if (address.length()) {
