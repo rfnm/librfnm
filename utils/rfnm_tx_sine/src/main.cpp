@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <csignal>
 #include <librfnm/device.h>
 #include <librfnm/constants.h>
 #include <math.h>

@@ -26,10 +26,6 @@ if(NOT COMMAND CPMAddPackage)
     include(cmake/cpm.cmake)
 endif()
 
-if(NOT TARGET asio)
-    include(cmake/cpm-asio.cmake)
-endif()
-
 # List all source files
 file(GLOB_RECURSE SRC "src/*.cpp")
 
@@ -90,15 +86,11 @@ function(configure_rfnm_target target)
     # Include the include folder
     target_include_directories(${target} PUBLIC "include/")
 
-    include_directories(${asio_SOURCE_DIR}/asio/include)
-
     # Link to spdlog
     target_link_libraries(${target} PRIVATE spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32>)
 
     # Link to libusb
     target_link_libraries(${target} PRIVATE PkgConfig::libusb)
-
-    #target_link_libraries(${target} PRIVATE asio)
 endfunction()
 
 # Configure all targets

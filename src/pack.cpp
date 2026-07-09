@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cstring>
 #include <librfnm/device.h>
 #include <librfnm/rx_stream.h>
 
