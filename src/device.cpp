@@ -2946,6 +2946,12 @@ MSDLL const struct rfnm_dev_status* device::get_dev_status() {
 // ---- phytimer phase 2: ticks-first timing surface ----
 
 MSDLL rfnm_api_failcode device::get_rx_timing(struct rx_timing *t) {
+    // Anchor reads must never serve the cached (ctor-zeroed) dev_status: right after an
+    // apply the worker's first status poll may not have landed, and the old behavior
+    // returned the PREVIOUS stream's anchor - or zeros on the first session after boot
+    // (defect #13; the device side now guarantees the anchor is published before the
+    // apply completes, so one refresh here reads truth). One control round-trip.
+    get(REQ_DEV_STATUS);
     uint32_t r_shift = s->dev_status.rx_r_shift;
 
     // tick rate = DCS/2; dcs_clk is populated once a stream has programmed the chain
@@ -2994,6 +3000,7 @@ MSDLL void device::get_rx_timing_health(uint64_t *disconts, uint64_t *breaks) {
 }
 
 MSDLL rfnm_api_failcode device::get_tx_timing(struct tx_timing *t) {
+    get(REQ_DEV_STATUS);	// same anchor-freshness contract as get_rx_timing (defect #13)
     t->t0 = s->dev_status.tx_t0;
     t->tick_hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
     t->r_num = 1u << s->dev_status.tx_r_shift;
