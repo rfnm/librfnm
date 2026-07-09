@@ -2764,7 +2764,7 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
                 }
 
                 if (resp_header.size != size) {
-                    spdlog::error("TCP control size mismatch: got {}, expected {}", static_cast<unsigned>(header.size, size));
+                    spdlog::error("TCP control size mismatch: got {}, expected {}", static_cast<unsigned>(resp_header.size), size);
                     return RFNM_API_USB_FAIL;
                 }
 
