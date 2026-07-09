@@ -15,6 +15,18 @@
 
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
 #include <poll.h>
+#include <sys/mman.h>
+
+// zero-copy local transport: the kernel packet pools, mmap'd from /dev/rfnm_data_ep on
+// the first local open and kept for the process lifetime (they alias one fixed system
+// carve-out, so they are process-global by nature - NOT device members, which also keeps
+// sizeof(device) and the consumer ABI unchanged). Worker threads read RX packets and
+// build TX packets in place, moving only pool indices through their data-ep ioctls.
+static struct rfnm_local_rx_pkt* local_rx_pool = nullptr;
+static struct rfnm_local_tx_pkt* local_tx_pool = nullptr;
+static size_t local_rx_pool_cnt = 0;
+static size_t local_tx_pool_cnt = 0;
+static std::mutex local_pool_mutex;
 #endif
 
 using namespace rfnm;
@@ -406,6 +418,51 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
         s->transport_status.transport = TRANSPORT_LOCAL;
         THREAD_COUNT = 2;
 
+        // zero-copy local data path: map the kernel packet pools (process-global,
+        // first local open in this process does the work)
+        {
+            std::lock_guard<std::mutex> lockGuard(local_pool_mutex);
+            if (local_rx_pool == nullptr) {
+                struct rfnm_local_transport_meminfo meminfo;
+                int pool_fd;
+
+                if (ioctl(fd, RFNM_IOCTL_BASE + (0xff & RFNM_GET_LOCAL_MEMINFO), &ep_ctrl_buf) < 0) {
+                    spdlog::error("Couldn't fetch local transport meminfo");
+                    goto exit_close_local;
+                }
+                memcpy(&meminfo, &ep_ctrl_buf[0], sizeof(struct rfnm_local_transport_meminfo));
+                local_rx_pool_cnt = meminfo.local_rx_bufsize;
+                local_tx_pool_cnt = meminfo.local_tx_bufsize;
+
+                // the mappings outlive the fd, so it closes right after; they alias a
+                // fixed carve-out and are kept for the process lifetime (no munmap)
+                pool_fd = open("/dev/rfnm_data_ep", O_RDWR);
+                if (pool_fd < 0) {
+                    spdlog::error("Couldn't open data ep for pool mapping");
+                    goto exit_close_local;
+                }
+                local_rx_pool = (struct rfnm_local_rx_pkt*)mmap(NULL,
+                    local_rx_pool_cnt * sizeof(struct rfnm_local_rx_pkt),
+                    PROT_READ, MAP_SHARED, pool_fd, RFNM_LOCAL_MMAP_RX_OFFSET);
+                local_tx_pool = (struct rfnm_local_tx_pkt*)mmap(NULL,
+                    local_tx_pool_cnt * sizeof(struct rfnm_local_tx_pkt),
+                    PROT_READ | PROT_WRITE, MAP_SHARED, pool_fd, RFNM_LOCAL_MMAP_TX_OFFSET);
+                close(pool_fd);
+                if (local_rx_pool == MAP_FAILED || local_tx_pool == MAP_FAILED) {
+                    spdlog::error("Couldn't map local packet pools");
+                    if (local_rx_pool != MAP_FAILED) {
+                        munmap(local_rx_pool, local_rx_pool_cnt * sizeof(struct rfnm_local_rx_pkt));
+                    }
+                    if (local_tx_pool != MAP_FAILED) {
+                        munmap(local_tx_pool, local_tx_pool_cnt * sizeof(struct rfnm_local_tx_pkt));
+                    }
+                    local_rx_pool = nullptr;
+                    local_tx_pool = nullptr;
+                    goto exit_close_local;
+                }
+            }
+        }
+
         if (get(REQ_ALL)) {
             goto exit_close_local;
         }
@@ -677,12 +734,21 @@ static void rfnm_usb_rx_async_cb(struct libusb_transfer* t) {
 
 
 void device::threadfn(size_t thread_index) {
-    // sized for the local transport's grown cs16 packets; USB/TCP only use the prefix
-    struct rfnm_rx_usb_buf* lrxbuf = (struct rfnm_rx_usb_buf*)new uint8_t[RFNM_LOCAL_RX_PACKET_SIZE]();
-    struct rfnm_tx_usb_buf* ltxbuf = (struct rfnm_tx_usb_buf*)new uint8_t[RFNM_LOCAL_TX_PACKET_SIZE]();
+    // USB/TCP stage packets here; the local transport points lrxbuf/ltxbuf into the
+    // mmap'd kernel pools instead, so the frees below must use the heap handles
+    uint8_t* lrxbuf_heap = new uint8_t[RFNM_LOCAL_RX_PACKET_SIZE]();
+    uint8_t* ltxbuf_heap = new uint8_t[RFNM_LOCAL_TX_PACKET_SIZE]();
+    struct rfnm_rx_usb_buf* lrxbuf = (struct rfnm_rx_usb_buf*)lrxbuf_heap;
+    struct rfnm_tx_usb_buf* ltxbuf = (struct rfnm_tx_usb_buf*)ltxbuf_heap;
     int transferred;
     auto& tpm = thread_data[thread_index];
     int r;
+#ifdef BUILD_RFNM_LOCAL_TRANSPORT
+    // zero-copy pool indices this pass holds (RX between GET and PUT, TX between ACQ and SUB)
+    uint32_t local_rx_idx = 0;
+    int local_rx_have = 0;
+    uint32_t local_tx_idx = 0;
+#endif
 
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
     int data_ep_fp;
@@ -697,8 +763,8 @@ void device::threadfn(size_t thread_index) {
     if (s->transport_status.transport == TRANSPORT_TCP) {
         // Only two threads for TCP; the shared data socket was connected by the constructor
         if (thread_index >= 2) {
-            delete[] (uint8_t*)lrxbuf;
-            delete[] (uint8_t*)ltxbuf;
+            delete[] lrxbuf_heap;
+            delete[] ltxbuf_heap;
             return;
         }
     }
@@ -1049,37 +1115,33 @@ void device::threadfn(size_t thread_index) {
                 pfd.events = POLLIN;
 
                 int ret = poll(&pfd, 1, /* timeout_ms= */ 5);
-                if (ret < 0) {
-                    perror("poll");
-                    // handle error…
-                }
-                else if (ret == 0) {
+                if (ret <= 0 || !(pfd.revents & POLLIN)) {
 
                     // poll timeout: no local packet within 5 ms. Normal idle tick at low
                     // sample rates (a 2.4 MSps stream fills a packet slower than the poll
                     // period), so it is not logged - it used to spam ~115 lines/s here.
 
+                    if (ret < 0) {
+                        perror("poll");
+                    }
                     {
                         std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                         rx_s.in.push(buf);
                         rx_s.cv.notify_one();
                     }
                     goto skip_rx;
-
-
-
                 }
-                else if (pfd.revents & POLLIN) {
-                    // safe to call RX ioctl once
-                    if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | 1, (uint8_t*)lrxbuf) < 0) {
-                        spdlog::error("RX queue error");
-                    }
-                    else {
-                        // got data in lrxbuf
-                        //spdlog::info("RX {}", static_cast<uint64_t>(lrxbuf->usb_cc));
-
-                    }
+                // zero-copy: take the index of the next filled pool packet and read it in
+                // place; PUT returns the slot after the convert (or on the reject path)
+                if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | RFNM_LOCAL_RX_GET, &local_rx_idx) < 0) {
+                    // benign: the sibling worker won the race for the packet poll() saw
+                    std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
+                    rx_s.in.push(buf);
+                    rx_s.cv.notify_one();
+                    goto skip_rx;
                 }
+                local_rx_have = 1;
+                lrxbuf = &local_rx_pool[local_rx_idx].p;
 #endif
             }
 
@@ -1126,6 +1188,12 @@ void device::threadfn(size_t thread_index) {
                             (uint32_t)lrxbuf->magic, (uint32_t)lrxbuf->adc_id, (uint32_t)lrxbuf->elem_cnt, transferred);
                     }
                 }
+#ifdef BUILD_RFNM_LOCAL_TRANSPORT
+                if (local_rx_have) {
+                    ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | RFNM_LOCAL_RX_PUT, (unsigned long)local_rx_idx);
+                    local_rx_have = 0;
+                }
+#endif
                 std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                 rx_s.in.push(buf);
                 rx_s.cv.notify_one();
@@ -1186,6 +1254,13 @@ void device::threadfn(size_t thread_index) {
                 //}
             }
 
+#ifdef BUILD_RFNM_LOCAL_TRANSPORT
+            if (local_rx_have) {
+                ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | RFNM_LOCAL_RX_PUT, (unsigned long)local_rx_idx);
+                local_rx_have = 0;
+            }
+#endif
+
 
 
 
@@ -1236,10 +1311,38 @@ void device::threadfn(size_t thread_index) {
             uint32_t tx_multi = (tx_elems * 3) / LA_TX_BASE_BUFSIZE_12;
             uint32_t tx_wire_len = RFNM_USB_TX_PACKET_HEAD_SIZE + tx_multi * LA_TX_BASE_BUFSIZE_12;
             if (s->transport_status.transport == TRANSPORT_LOCAL) {
-                // same SoC: no reason to pack 16->12 only for the kernel to unpack again
+#ifdef BUILD_RFNM_LOCAL_TRANSPORT
+                // zero-copy: claim a pool slot BEFORE building and assemble the packet in
+                // place (same SoC: cs16 payload, nobody packs/unpacks); SUB below hands the
+                // filled index to the kernel, so the packet never exists anywhere else
+                struct pollfd pfd;
+                pfd.fd = data_ep_fp;
+                pfd.events = POLLOUT;
+
+                int ret = poll(&pfd, 1, /* timeout_ms= */ 5);
+                if (ret <= 0 || !(pfd.revents & POLLOUT)) {
+                    if (ret < 0) {
+                        perror("poll");
+                    } else if (ret == 0) {
+                        spdlog::error("tx pool timeout");
+                    }
+                    std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+                    tx_s.in.push(buf);
+                    reorder_tx_queue_nolock(tx_s);
+                    goto read_dev_status;
+                }
+                if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | RFNM_LOCAL_TX_ACQ, &local_tx_idx) < 0) {
+                    // benign: the sibling worker claimed the slot poll() saw
+                    std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+                    tx_s.in.push(buf);
+                    reorder_tx_queue_nolock(tx_s);
+                    goto read_dev_status;
+                }
+                ltxbuf = &local_tx_pool[local_tx_idx].p;
                 memcpy((uint8_t*)ltxbuf + RFNM_USB_TX_PACKET_HEAD_SIZE, buf->buf, (size_t)tx_elems * 4);
                 ltxbuf->fmt = RFNM_PACKET_FMT_CS16;
                 tx_wire_len = RFNM_USB_TX_PACKET_HEAD_SIZE + tx_multi * LA_TX_BASE_BUFSIZE;
+#endif
             } else {
                 pack_cs16_to_12((uint8_t*)ltxbuf->buf, buf->buf, tx_elems);
                 ltxbuf->fmt = RFNM_PACKET_FMT_PACKED12;
@@ -1375,44 +1478,17 @@ void device::threadfn(size_t thread_index) {
 
             if (s->transport_status.transport == TRANSPORT_LOCAL) {
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
-                struct pollfd pfd;
-                pfd.fd = data_ep_fp;
-                pfd.events = POLLOUT;
-
-                int ret = poll(&pfd, 1, /* timeout_ms= */ 5);
-                if (ret < 0) {
-                    perror("poll");
-                    // handle error…
+                // the packet was built in the claimed pool slot above - hand over the index
+                if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | RFNM_LOCAL_TX_SUB, (unsigned long)local_tx_idx) < 0) {
+                    spdlog::error("TX queue error");
                 }
-                else if (ret == 0) {
-
-                    spdlog::error("tx pool timeout");
-
-                    // timeout
-
-                    {
-                        std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
-                        tx_s.in.push(buf);
-                        reorder_tx_queue_nolock(tx_s);
-                    }
-                    goto read_dev_status;
-
-
-
-                }
-                else if (pfd.revents & POLLOUT) {
-                    // safe to call RX ioctl once
-                    if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | 0, (uint8_t*)ltxbuf) < 0) {
-                        spdlog::error("TX queue error");
-                    }
-                    else {
-                        if (getenv("RFNM_DEBUG_RX")) {
-                            static std::atomic<int> dbg_txs{0};
-                            int n = ++dbg_txs;
-                            if (n <= 3 || n % 50 == 0) {
-                                spdlog::info("TXSEND n {} cc {} flags {:x} ptmr {}", n,
-                                    (uint64_t)ltxbuf->usb_cc, (uint32_t)ltxbuf->tx_flags, (uint32_t)ltxbuf->phytimer);
-                            }
+                else {
+                    if (getenv("RFNM_DEBUG_RX")) {
+                        static std::atomic<int> dbg_txs{0};
+                        int n = ++dbg_txs;
+                        if (n <= 3 || n % 50 == 0) {
+                            spdlog::info("TXSEND n {} cc {} flags {:x} ptmr {}", n,
+                                (uint64_t)ltxbuf->usb_cc, (uint32_t)ltxbuf->tx_flags, (uint32_t)ltxbuf->phytimer);
                         }
                     }
                 }
@@ -1516,20 +1592,19 @@ void device::threadfn(size_t thread_index) {
     }
 
     //spdlog::error("exiting thread");
-    if (lrxbuf) {
-        delete[] (uint8_t*)lrxbuf;
-    }
-    //spdlog::error("past delete");
-    if (ltxbuf) {
-        delete[] (uint8_t*)ltxbuf;
-    }
-    //spdlog::error("past second delete");
+    delete[] lrxbuf_heap;
+    delete[] ltxbuf_heap;
 
     // TCP data socket teardown happens in the destructor after all threads have
     // joined, since the connection is shared by the RX and TX worker threads
 
     if (s->transport_status.transport == TRANSPORT_LOCAL) {
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
+        // a held RX slot leaks back to the kernel only at last-close reclaim; return
+        // it here so an aborted pass doesn't pin a pool packet for the session
+        if (local_rx_have) {
+            ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | RFNM_LOCAL_RX_PUT, (unsigned long)local_rx_idx);
+        }
         close(data_ep_fp);
 #endif
     }

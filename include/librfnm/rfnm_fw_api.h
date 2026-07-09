@@ -436,6 +436,16 @@ RFNM_PACKED_STRUCT(
 #define RFNM_IOCTL_BASE  ( ((3U) << 30) | (('R') << 8) | ( 0U << 0 ) | (RFNM_SYSCTL_TRANSFER_SIZE << 16) )
 #define RFNM_IOCTL_BASE_DATA  ( ((3U) << 30) | (('R') << 8) | ( 0U << 0 ) | (RFNM_USB_TX_PACKET_SIZE << 16) )
 
+// /dev/rfnm_data_ep zero-copy protocol - values mirrored in la93xx_host_sw
+// la9310_rfnm.h, keep the two in sync. The RX/TX packet pools are mmap'd from the
+// chardev at the offsets below; the ioctls move pool indices only, never payload.
+#define RFNM_LOCAL_RX_GET 2	// writes u32 pool index of the next filled RX packet to *arg
+#define RFNM_LOCAL_RX_PUT 3	// arg = index: return the packet to the free pool
+#define RFNM_LOCAL_TX_ACQ 4	// writes u32 pool index of a claimed free TX slot to *arg
+#define RFNM_LOCAL_TX_SUB 5	// arg = index: submit the filled slot for transmission
+#define RFNM_LOCAL_MMAP_RX_OFFSET 0x0UL
+#define RFNM_LOCAL_MMAP_TX_OFFSET 0x10000000UL
+
 #define RFNM_PROTOCOL_VERSION 2
 #define RFNM_UDP_CTRL_PORT 28285
 #define RFNM_UDP_DATA_PORT 28286

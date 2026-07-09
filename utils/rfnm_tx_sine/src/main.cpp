@@ -43,7 +43,9 @@ int main() {
 
     uint8_t* s[NBUF];
 
-    struct rfnm::tx_buf txbuf[NBUF];
+    // zero-initialized on purpose: garbage tx_flags can carry RFNM_TX_FLAG_TIME_VALID
+    // with a junk phytimer, which flips the device into timed mode and parks the pump
+    struct rfnm::tx_buf txbuf[NBUF] = {};
 
     uint16_t* d;
     static double t;
