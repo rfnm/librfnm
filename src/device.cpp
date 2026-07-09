@@ -749,28 +749,11 @@ void device::threadfn(size_t thread_index) {
                 }
             }
 
-#if 0
-
-            {
-                std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
-
-                if (rx_s.in.empty()) {
-                    goto skip_rx;
-                }
-
-                buf = rx_s.in.front();
-                rx_s.in.pop();
-            }
-#else
-
             {
                 std::unique_lock lk(rx_s.in_mutex);
                 if (rx_s.in.empty()) {
-                    //spdlog::error("rx_s.in.empty()");
                     rx_s.cv.wait_for(lk, std::chrono::microseconds(1000));
                     if (rx_s.in.empty()) {
-                        //int qin = rx_s.in.size();
-                        //spdlog::error("empty -> skipping rx");
                         goto skip_rx;
                     }
                 }
@@ -778,9 +761,6 @@ void device::threadfn(size_t thread_index) {
                 buf = rx_s.in.front();
                 rx_s.in.pop();
             }
-
-
-#endif
             if (s->transport_status.transport == TRANSPORT_USB) {
                 if (!usb_handle->primary) {
                     spdlog::info("Thread {} detected force shutdown during USB op", thread_index);
@@ -788,7 +768,7 @@ void device::threadfn(size_t thread_index) {
                 }
 
                 libusb_device_handle* lusb_handle = usb_handle->primary;
-                if (1 && s->transport_status.usb_boost_connected) {
+                if (s->transport_status.usb_boost_connected) {
                     std::lock_guard<std::mutex> lockGuard(s_transport_pp_mutex);
                     //if (s->transport_status.boost_pp_rx) {
                     if ((tpm.ep_id % 2) == 0) {
@@ -1064,19 +1044,6 @@ void device::threadfn(size_t thread_index) {
 
             if (s->transport_status.transport == TRANSPORT_LOCAL) {
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
-#if 0
-                if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | 1, (uint8_t*)lrxbuf) < 0) {
-                    //spdlog::error("thread loop RX no data");
-                    {
-                        std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
-                        rx_s.in.push(buf);
-                        rx_s.cv.notify_one();
-                    }
-                    std::this_thread::sleep_for(std::chrono::microseconds(1000));
-                    goto skip_rx;
-                }
-#else
-
                 struct pollfd pfd;
                 pfd.fd = data_ep_fp;
                 pfd.events = POLLIN;
@@ -1113,9 +1080,6 @@ void device::threadfn(size_t thread_index) {
 
                     }
                 }
-
-
-#endif
 #endif
             }
 
@@ -1237,25 +1201,16 @@ void device::threadfn(size_t thread_index) {
             }
 
             struct tx_buf* buf;
-#if 0
-            if (tx_s.in.empty()) {
-                goto read_dev_status;
-            }
-#else
 
             {
                 std::unique_lock lk(tx_s.in_mutex);
                 if (tx_s.in.empty()) {
-                    //spdlog::error("rx_s.in.empty()");
                     tx_s.cv.wait_for(lk, std::chrono::microseconds(1000));
                     if (tx_s.in.empty()) {
                         goto read_dev_status;
                     }
                 }
             }
-
-#endif
-
 
             // you can have the reorder either here or down there but let's keep it down there for now, mostly untested
             {
@@ -1420,25 +1375,6 @@ void device::threadfn(size_t thread_index) {
 
             if (s->transport_status.transport == TRANSPORT_LOCAL) {
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
-#if 0
-                if (ioctl(data_ep_fp, RFNM_IOCTL_BASE_DATA | 0, (uint8_t*)ltxbuf) < 0) {
-                    //spdlog::error("thread loop TX busy");
-                    //perror("ioctl failed");
-                    //printf("KO %d\n", ltxbuf->usb_cc);
-                    {
-                        std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
-                        tx_s.in.push(buf);
-                        reorder_tx_queue_nolock(tx_s);
-                    }
-                    std::this_thread::sleep_for(std::chrono::microseconds(1000));
-                    goto read_dev_status;
-                }
-                else {
-                    //printf("ok %d\n", ltxbuf->usb_cc);
-                }
-#else
-                //spdlog::error("tx loop");
-
                 struct pollfd pfd;
                 pfd.fd = data_ep_fp;
                 pfd.events = POLLOUT;
@@ -1480,11 +1416,6 @@ void device::threadfn(size_t thread_index) {
                         }
                     }
                 }
-
-
-
-
-#endif
 #endif
             }
 
@@ -1520,7 +1451,6 @@ void device::threadfn(size_t thread_index) {
             continue;
         }
         {
-#if 1
             using std::chrono::high_resolution_clock;
             using std::chrono::duration_cast;
             using std::chrono::duration;
@@ -1532,7 +1462,7 @@ void device::threadfn(size_t thread_index) {
 
             // TX closed-loop pacing rides on dev_status freshness; with small TX packets a
             // 5 ms status lag forces deep pipelines (or underruns), so poll at >=1 ms.
-            if (1 && ms_int.count() > 1) {
+            if (ms_int.count() > 1) {
 
 
                 if (s->transport_status.transport == TRANSPORT_TCP) {
@@ -1554,7 +1484,7 @@ void device::threadfn(size_t thread_index) {
                         spdlog::error("control_transfer for RFNM_GET_DEV_STATUS failed");
                         //return RFNM_API_USB_FAIL;
 
-                        if (1 && ms_int.count() > 25 && s->transport_status.transport != TRANSPORT_TCP) {
+                        if (ms_int.count() > 25 && s->transport_status.transport != TRANSPORT_TCP) {
                             spdlog::error("stopping stream");
 
                             for (int8_t i = 0; i < THREAD_COUNT; i++) {
@@ -1582,7 +1512,6 @@ void device::threadfn(size_t thread_index) {
                     //s_dev_status_mutex.unlock();
                 }
             }
-#endif        
         }
     }
 
@@ -3250,22 +3179,6 @@ MSDLL rfnm_api_failcode device::rx_disable_stale_channels(uint32_t timeout_us) {
     }
     return apply(applies, true, timeout_us);
 }
-
-/*
-MSDLL rfnm_api_failcode device::set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply) {
-    if (channel < MAX_RX_CHANNELS) {
-        s->rx.ch[channel].samp_freq_div_m = m;
-        s->rx.ch[channel].samp_freq_div_n = n;
-
-        if (apply) {
-            return set(rx_channel_apply_flags[channel]);
-        } else {
-            return RFNM_API_OK;
-        }
-    } else {
-        return RFNM_API_NOT_SUPPORTED;
-    }
-}*/
 
 MSDLL rfnm_api_failcode device::set_rx_channel_freq(uint32_t channel, int64_t freq, bool apply) {
     if (channel < MAX_RX_CHANNELS) {

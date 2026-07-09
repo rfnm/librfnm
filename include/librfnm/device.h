@@ -311,7 +311,6 @@ namespace rfnm {
         MSDLL static int16_t suggested_lpf_bw(uint64_t samp_rate, const struct rfnm_dev_hwinfo_clock* clock = nullptr);
 
         // RX channel setters
-        //MSDLL rfnm_api_failcode set_rx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = false);
         MSDLL rfnm_api_failcode set_rx_channel_freq(uint32_t channel, int64_t freq, bool apply = false);
         MSDLL rfnm_api_failcode set_rx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = false);
         MSDLL rfnm_api_failcode set_rx_channel_gain(uint32_t channel, int8_t gain, bool apply = false);
@@ -324,7 +323,6 @@ namespace rfnm {
         // not exposing setter for data_type because this library only handles complex samples for now
 
         // TX channel setters
-        //MSDLL rfnm_api_failcode set_tx_channel_samp_freq_div(uint32_t channel, int16_t m, int16_t n, bool apply = false);
         MSDLL rfnm_api_failcode set_tx_channel_freq(uint32_t channel, int64_t freq, bool apply = false);
         MSDLL rfnm_api_failcode set_tx_channel_rfic_lpf_bw(uint32_t channel, int16_t bw, bool apply = false);
         MSDLL rfnm_api_failcode set_tx_channel_power(uint32_t channel, int8_t power, bool apply = false);
@@ -361,8 +359,6 @@ namespace rfnm {
         MSDLL static std::string rf_path_to_string(enum rfnm_rf_path path);
 
         MSDLL static const char* failcode_to_string(rfnm_api_failcode code);
-
-        size_t THREAD_COUNT = 16;
 
 
         inline ch_helper rx_ch_helper(uint8_t rx_ch_id) {
@@ -403,8 +399,6 @@ namespace rfnm {
         void dqbuf_overwrite_cc_locked(uint8_t adc_id);
         MSDLL int dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock);
         MSDLL void reorder_tx_queue_nolock(tx_buf_s &tx_s);
-
-        MSDLL std::vector<uint64_t> get_retransmission_list(uint8_t adc_id);
 
         MSDLL void reset_device_state();
 
@@ -461,6 +455,8 @@ namespace rfnm {
 
         struct rx_buf_s rx_s = {};
         struct tx_buf_s tx_s = {};
+        // live worker count for this transport (<= MAX_THREAD_COUNT), set once in the ctor
+        size_t THREAD_COUNT = 16;
         struct thread_data_s thread_data[MAX_THREAD_COUNT] = {};
 
         std::array<std::thread, MAX_THREAD_COUNT> thread_c{};

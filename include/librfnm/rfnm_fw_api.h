@@ -71,8 +71,6 @@ RFNM_PACKED_STRUCT(
 	int64_t freq_max;
 	int64_t freq;
 	int16_t rfic_lpf_bw;
-	/*int16_t samp_freq_div_m;
-	int16_t samp_freq_div_n;*/
 	int8_t avail;
 	int8_t power;
 	struct rfnm_range_8b power_range;
@@ -96,8 +94,6 @@ RFNM_PACKED_STRUCT(
 	int64_t freq_max;
 	int64_t freq;
 	int16_t rfic_lpf_bw;
-	/*int16_t samp_freq_div_m;
-	int16_t samp_freq_div_n;*/
 	int8_t avail;
 	int8_t gain;
 	struct rfnm_range_8b gain_range;

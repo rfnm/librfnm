@@ -12,7 +12,6 @@ namespace rfnm {
     const size_t MAX_THREAD_COUNT = 16;
 
     const size_t MIN_RX_BUFCNT = 1000;
-    // tmp recomb buf change to test eth
     // reorder window for the 16 reader threads' out-of-order completions. Variable-size
     // packets at deep decimation rates arrive at ~2000/s (small partials), so 150 was only
     // ~83 ms of buffering - a single thread descheduled under load made the queue overflow
@@ -88,7 +87,6 @@ namespace rfnm {
         TRANSPORT_LOCAL,
         TRANSPORT_USB,
         TRANSPORT_TCP,
-        TRANSPORT_UDP,
         TRANSPORT_FIND
     };
 
