@@ -283,6 +283,12 @@ RFNM_PACKED_STRUCT(
 	// TX board steals the shared FE port - never require one just to read the clock).
 	// Freshness = one status-fetch round trip; unwrap host-side (32-bit, ~70 s wrap).
 	uint32_t phytimer_now;
+
+	// the feed contract (exactness plan): what the kernel pump actually enforces, so
+	// clients size their lead from the device instead of folklore constants. Mirrors
+	// the ksw module's rfnm_status_ext.h - keep the two in sync.
+	uint32_t tx_feed_lead_ticks;	// TX pump feed lead in phytimer ticks (rate-aware)
+	uint32_t rx_flush_deadline_us;	// partial RX packet flush deadline
 }
 );
 
@@ -321,7 +327,8 @@ RFNM_PACKED_STRUCT(
 	struct rfnm_dev_txn {
 	uint32_t op;	// 0 = reset ring, 1 = push entry
 	uint32_t tick;	// absolute phytimer tick (the entry's identity)
-	uint8_t kind;	// 1 = RX_WINDOW, 2 = TX_SLOT, 3 = FE
+	uint8_t kind;	// 1 = RX_WINDOW, 2 = TX_SLOT, 3 = FE, 4 = ANCHOR (kernel-side sticky
+			// requested stream anchor, flags bit0 = valid - never enters the M4 ring)
 	uint8_t flags;
 	uint16_t type;	// slot-type tag / FE profile index
 	uint32_t len;	// samples

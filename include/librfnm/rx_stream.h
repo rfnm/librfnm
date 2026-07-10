@@ -22,6 +22,14 @@ namespace rfnm {
         MSDLL rfnm_api_failcode read(void * const * buffs, size_t elems_to_read,
             size_t &elems_read, uint64_t &timestamp_ns, uint32_t timeout_us = 20000);
 
+        // "request x, get x" for stream consumers: consume-and-drop until the next
+        // sample read() delivers is stamped exactly `tick` (extended ticks, same
+        // domain as get_phytimer). Any offset, mid-session, sample-exact via the
+        // stamps - packet boundaries never quantize delivery. SCHED_LATE = the tick
+        // is already behind a channel's head (samples cannot be unread);
+        // SCHED_MISALIGNED = the tick falls between two samples of this rate plan.
+        MSDLL rfnm_api_failcode align_to_tick(uint64_t tick, uint32_t timeout_us = 100000);
+
     private:
         rfnm_api_failcode rx_dqbuf_multi(uint32_t timeout_us, bool first = false);
         void rx_qbuf_multi();

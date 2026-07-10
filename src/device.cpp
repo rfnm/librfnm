@@ -3122,11 +3122,52 @@ MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tic
     if (!s->dev_status.tx_epoch) {
         return RFNM_API_SCHED_NO_ANCHOR;
     }
-    if ((tick - s->dev_status.tx_t0) % ticks_per_slot) {
-        return RFNM_API_SCHED_MISALIGNED;
+    uint64_t off_ticks = (tick - s->dev_status.tx_t0) % ticks_per_slot;
+    if (off_ticks) {
+        // pad-to-exact: the gate can only open on the DAC slot grid, so open one
+        // slot boundary below and lead with zeros - the CONTENT airs at `tick`
+        // exactly. Sample math is exact via R = 2^r_shift / 2 ticks per sample.
+        uint64_t lead2 = off_ticks * 2ull;
+        uint64_t rs = 1ull << s->dev_status.tx_r_shift;
+        if (lead2 % rs) {
+            return RFNM_API_SCHED_MISALIGNED;   // tick falls between samples: not airable
+        }
+        uint32_t lead = (uint32_t)(lead2 / rs);
+        uint32_t cnt = buf->elem_cnt ? buf->elem_cnt : RFNM_USB_TX_PACKET_ELEM_CNT;
+        uint32_t padded = (cnt + lead + 255u) & ~255u;
+        if (padded > RFNM_USB_TX_PACKET_ELEM_CNT) {
+            return RFNM_API_SCHED_MISALIGNED;   // no slack for the pad: align the tick or shorten the burst
+        }
+        memmove(buf->buf + (size_t)lead * 4, buf->buf, (size_t)cnt * 4);
+        memset(buf->buf, 0, (size_t)lead * 4);
+        if (padded > cnt + lead) {
+            memset(buf->buf + (size_t)(cnt + lead) * 4, 0, (size_t)(padded - cnt - lead) * 4);
+        }
+        buf->elem_cnt = padded;
+        tick -= off_ticks;
     }
     buf->phytimer = (uint32_t)tick;
     buf->tx_flags = RFNM_TX_FLAG_TIME_VALID | ((s->dev_status.tx_epoch & 0xFF) << 8);
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::anchor_at(uint64_t tick) {
+    // sticky session anchor (kind 4 on the schedule verb): phase congruence and
+    // re-mint stickiness live kernel/M4-side - see the header contract. USB/TCP are
+    // fire-and-forget; verify via get_rx_timing/get_tx_timing after the next apply.
+    return schedule_ctl(tick, 4 /* ANCHOR */, 0, 0, 1 /* flags bit0: tick valid */, 0);
+}
+
+MSDLL rfnm_api_failcode device::get_feed_contract(uint32_t *tx_feed_lead_ticks, uint32_t *rx_flush_deadline_us) {
+    if (get(REQ_DEV_STATUS)) {
+        return RFNM_API_USB_FAIL;
+    }
+    if (tx_feed_lead_ticks) {
+        *tx_feed_lead_ticks = s->dev_status.tx_feed_lead_ticks;
+    }
+    if (rx_flush_deadline_us) {
+        *rx_flush_deadline_us = s->dev_status.rx_flush_deadline_us;
+    }
     return RFNM_API_OK;
 }
 
@@ -3167,7 +3208,11 @@ MSDLL rfnm_api_failcode device::schedule_rx(uint64_t tick, uint32_t len_samples,
     // capture len_samples starting at the absolute phytimer tick (sample resolution).
     // Fire-and-forget on remote transports: schedule health is read back via the
     // dev_status counters, arrivals via the stamped RX packets themselves.
-    return schedule_ctl(tick, 1 /* RX window */, tag, len_samples, 0, 0);
+    // The window LENGTH quantizes UP to the VSPA chunk (768 samples): the open tick
+    // stays exact, extra tail samples arrive stamped - the client discards past its
+    // request instead of losing coverage to a truncating division device-side.
+    uint32_t len = (len_samples + 767u) / 768u * 768u;
+    return schedule_ctl(tick, 1 /* RX window */, tag, len, 0, 0);
 }
 
 MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks) {

@@ -147,6 +147,69 @@ rfnm_api_failcode rx_stream::align_channels(bool initial) {
     return RFNM_API_DQBUF_NO_DATA;
 }
 
+MSDLL rfnm_api_failcode rx_stream::align_to_tick(uint64_t tick, uint32_t timeout_us) {
+    if (!stream_active || !timing_valid) {
+        return RFNM_API_DQBUF_NO_DATA;
+    }
+
+    for (int pass = 0; pass < 4096; pass++) {
+        bool need_data = false;
+        for (uint32_t channel : channels) {
+            if (!pending_rx_buf[channel] || !samples_left[channel]) {
+                need_data = true;
+            }
+        }
+        if (need_data) {
+            rfnm_api_failcode ret = rx_dqbuf_multi(timeout_us);
+            if (ret) {
+                return ret;
+            }
+            continue;
+        }
+
+        bool aligned = true;
+        for (uint32_t channel : channels) {
+            uint64_t st = pending_head_stamp_ext(channel);
+            if (st == tick) {
+                continue;
+            }
+            if (st > tick) {
+                return RFNM_API_SCHED_LATE;     // target already consumed: cannot rewind
+            }
+            uint64_t behind_ticks = tick - st;
+            uint64_t behind_samples = (uint64_t)(((unsigned __int128)behind_ticks * timing.r_den) / timing.r_num);
+            if (!behind_samples) {
+                return RFNM_API_SCHED_MISALIGNED;   // tick falls between two samples
+            }
+            aligned = false;
+            if (behind_samples >= samples_left[channel]) {
+                dev.rx_qbuf(pending_rx_buf[channel]);
+                pending_rx_buf[channel] = nullptr;
+                samples_left[channel] = 0;
+            } else {
+                samples_left[channel] -= (uint32_t)behind_samples;
+            }
+        }
+
+        if (aligned) {
+            // jump the delivery timeline truthfully to the requested point (same
+            // monotonicity rules as the gap resync above)
+            if (tick >= t0_ext) {
+                pos_samples = (uint64_t)(((unsigned __int128)(tick - t0_ext) * timing.r_den) / timing.r_num);
+            } else {
+                t0_ext = tick - ticks_of_samples(pos_samples);
+            }
+            for (uint32_t channel : channels) {
+                next_stamp_ext[channel] = pending_head_stamp_ext(channel) + ticks_of_samples(samples_left[channel]);
+            }
+            gap_pending = false;
+            return RFNM_API_OK;
+        }
+    }
+
+    return RFNM_API_DQBUF_NO_DATA;
+}
+
 MSDLL rfnm_api_failcode rx_stream::start() {
     rfnm_api_failcode ret = RFNM_API_OK;
 

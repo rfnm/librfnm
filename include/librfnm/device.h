@@ -238,10 +238,35 @@ namespace rfnm {
         // TDD pattern: gates + frontend flips on one M4 tick grid, sample-exact
         // stamps, one DISCONT per window boundary. period/duty in TICKS, both must
         // be multiples of the chunk (768 ADC samples; ticks per chunk from the
-        // clock plan), duty < period, period >= ~4 ms (v1 scheduler floor).
-        // LOCAL transport only in v1.
+        // clock plan), duty < period, period >= ~4 ms (v1 scheduler floor; a 1.25 ms
+        // dark arm is proven clean). Reachable on EVERY transport (USB ep0 / TCP /
+        // LOCAL). The pattern's PHASE is the stream anchor's: tile boundaries land at
+        // anchor + k*period, so anchor_at() is how a pattern aligns to an external
+        // timeline (e.g. NR DL slots). FE flips need RFNM_CH_RF_ON_TDD enables, RX
+        // apply BEFORE TX apply (the RX half-profile parks the PA - that is the TDD
+        // TX-desense fix).
         MSDLL rfnm_api_failcode rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks);
         MSDLL rfnm_api_failcode rx_tdd_stop();
+        // ---- exactness plan: the client-requested stream anchor ----
+        // Request the stream anchor (rx_t0 AND tx_t0 - the hardware mints ONE shared
+        // timeline) at `tick`. The gates open at the earliest achievable tick
+        // CONGRUENT to the request: the tick itself when the lead suffices (~4 ms
+        // guard + command transit), else advanced by whole TDD periods when a pattern
+        // is armed / whole chunks otherwise - and every mid-session self-heal re-mint
+        // preserves that congruence, so a requested phase holds for the session.
+        // Sticky until the session's SM reset. Takes effect via an immediate re-gate
+        // when a stream is running, else at the next apply. USB/TCP are
+        // fire-and-forget: verify with get_rx_timing/get_tx_timing (t0 == request, or
+        // congruent to it). Any tick is accepted - phase is the contract, not the
+        // absolute first window.
+        MSDLL rfnm_api_failcode anchor_at(uint64_t tick);
+        inline rfnm_api_failcode rx_anchor_at(uint64_t tick) { return anchor_at(tick); }
+        inline rfnm_api_failcode tx_anchor_at(uint64_t tick) { return anchor_at(tick); }
+        // The feed contract, published by the kernel (never hardcode these): the TX
+        // pump's enforced feed lead in phytimer ticks (rate-aware; OAI sl_ahead sanity)
+        // and the partial-RX-packet flush deadline in us (bounds worst-case RX
+        // delivery latency). Fetches a fresh dev_status.
+        MSDLL rfnm_api_failcode get_feed_contract(uint32_t *tx_feed_lead_ticks, uint32_t *rx_flush_deadline_us);
         // ---- v3: absolute-time scheduling (transport-general) ----
         // Requests are stamped with the ABSOLUTE phytimer tick at which they execute
         // (same domain as get_phytimer / the RX stamps), monotonic by tick, >= 150 us
@@ -275,12 +300,16 @@ namespace rfnm {
         // TX-only clients must NOT open an RX stream just to read the clock (an RX
         // apply on a TX board steals the shared FE port).
         MSDLL rfnm_api_failcode get_phytimer(uint64_t *tick);
-        // Mark buf to air its first sample at exactly `tick` (extended ticks, same
-        // domain as rx stamps). Validates slot alignment (256 samples x R); the
-        // kernel enforces the scheduling window (min ~64 slots lead, max ~ring span
-        // ~= 68 ms at 61.44M) and zero-fills any gap, so silence between scheduled
-        // bursts is automatic. Rejects are counted in tx_timing.timed_rejects -
-        // never silent, never mis-timed.
+        // Mark buf to air its CONTENT first sample at exactly `tick` (extended ticks,
+        // same domain as rx stamps) - any tick, no slot alignment required: a
+        // sub-slot tick opens the gate at the slot boundary below (<= 255 samples
+        // early, airing the zero pad) and the content lands at `tick` exactly
+        // (pad-to-exact). Needs the buffer to have slack for the pad: a full packet
+        // with a misaligned tick is rejected SCHED_MISALIGNED. The kernel enforces
+        // the scheduling window (min ~64 slots lead, max ~ring span ~= 68 ms at
+        // 61.44M) and zero-fills any gap, so silence between scheduled bursts is
+        // automatic. Rejects are counted in tx_timing.timed_rejects - never silent,
+        // never mis-timed.
         MSDLL rfnm_api_failcode tx_buf_schedule(struct tx_buf *buf, uint64_t tick);
 
         MSDLL rfnm_api_failcode apply(uint16_t applies, bool confirm_execution = true, uint32_t timeout_us = 1000000);
