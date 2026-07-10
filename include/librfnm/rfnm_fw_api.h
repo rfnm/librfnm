@@ -360,6 +360,11 @@ typedef enum {
 	RFNM_API_SCHED_FULL = 15,	// request ring full (kernel ENOSPC)
 	RFNM_API_SCHED_ORDER = 16,	// non-monotonic tick (kernel EINVAL)
 	RFNM_API_SCHED_NOT_RESET = 17,	// ring never schedule_reset() (kernel ENXIO)
+	// defect #18: the USB RX pipe is unrecoverably dead for this session (board-side
+	// producer parked; SET_INTERFACE resyncs exhausted their budget without progress).
+	// Host-generated, never on the wire. The client must reopen the device - retrying
+	// rx_dqbuf will keep returning this until the stream is torn down and restarted.
+	RFNM_API_RX_PIPE_DEAD = 18,
 } rfnm_api_failcode;
 
 #define RFNM_RX_USB_BUF_MULTI 80

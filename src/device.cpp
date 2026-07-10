@@ -892,6 +892,11 @@ void device::threadfn(size_t thread_index) {
                 static thread_local bool wd_dead_pending = false;
                 static thread_local bool wd_gap_counted = false;
                 static thread_local std::chrono::high_resolution_clock::time_point wd_dead_since;
+                // defect #18: resyncs fired since the last observed URB progress. A resync
+                // that actually healed a transient ep stall shows progress and zeroes this;
+                // one that just re-armed endpoints below a stopped producer does not - two
+                // of those in a row and the pipe is declared unrecoverable (latch below).
+                static thread_local uint32_t wd_resyncs_no_progress = 0;
                 auto rx_tstart = std::chrono::high_resolution_clock::now();
                 if (wd_generation != rx_work_generation) {
                     // new rx session: re-arm. The progress baseline must not carry a previous
@@ -906,6 +911,7 @@ void device::threadfn(size_t thread_index) {
                     wd_generation = rx_work_generation;
                     wd_dead_pending = false;
                     wd_gap_counted = false;
+                    wd_resyncs_no_progress = 0;
                     rx_last_progress = rx_tstart;
                 }
                 // UDC stall recovery, host-driven: if the pipe is dead while URBs are
@@ -934,7 +940,8 @@ void device::threadfn(size_t thread_index) {
                 // deadline gets reaped, not resynced. Continuous sessions keep the flat 2 s
                 // backstop unchanged (a resync there is cheap and possibly the only way out).
                 bool rx_pipe_dead = false;
-                if (std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - rx_last_progress).count() > 2000) {
+                if (!rx_pipe_dead_latch.load(std::memory_order_relaxed) &&
+                        std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - rx_last_progress).count() > 2000) {
                     if (!rx_scheduled_session) {
                         rx_pipe_dead = true;
                     } else {
@@ -982,6 +989,21 @@ void device::threadfn(size_t thread_index) {
                     wd_dead_pending = false;
                     wd_gap_counted = false;
                 }
+                if (rx_pipe_dead && wd_resyncs_no_progress >= 2) {
+                    // defect #18: the resync budget is spent with zero progress after it.
+                    // SET_INTERFACE can only re-arm the endpoints BELOW the stopped board-
+                    // side producer - each further one just ESHUTDOWN-storms the gadget
+                    // back into the same frozen state (day-2 forensics: terminal, forever).
+                    // Fail hard instead: latch, wake every dqbuf waiter, and go quiet. No
+                    // SM reset from in here by design - the client owns recovery (reopen).
+                    if (!rx_pipe_dead_latch.exchange(true)) {
+                        spdlog::error("RX pipe still dead after {} SET_INTERFACE resyncs: board-side producer parked, failing hard (RX_PIPE_DEAD) - client must reopen",
+                            wd_resyncs_no_progress);
+                        rx_s.cv.notify_all();
+                    }
+                    rx_pipe_dead = false;
+                    wd_dead_pending = false;
+                }
                 if (rx_pipe_dead) {
                     spdlog::warn("RX pipeline dead 2s: SET_INTERFACE resync");
                     for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
@@ -1021,6 +1043,7 @@ void device::threadfn(size_t thread_index) {
                         }
                     }
                     s->transport_status.rx_dead_pipe_resync_cnt++;
+                    wd_resyncs_no_progress++;
                     wd_dead_pending = false;
                     rx_reap_rr = 0;
                     rx_last_progress = std::chrono::high_resolution_clock::now();
@@ -1079,6 +1102,7 @@ void device::threadfn(size_t thread_index) {
                     break;
                 }
                 rx_last_progress = std::chrono::high_resolution_clock::now();
+                wd_resyncs_no_progress = 0;     // real URB progress: the last resync (if any) genuinely healed
                 {
                     int q = arz.next_reap[got_ep];
                     transferred = arz.xfer[got_ep][q]->actual_length;
@@ -1937,7 +1961,9 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
     }
 
     // tell the USB RX engine to re-arm its dead-pipe watchdog baselines for the new
-    // session (bumped before the workers wake so the first RX pass sees the new gen)
+    // session (bumped before the workers wake so the first RX pass sees the new gen);
+    // a fresh session also gets a fresh dead-pipe verdict (#18)
+    rx_pipe_dead_latch = false;
     rx_work_generation++;
 
     for (int8_t i = 0; i < THREAD_COUNT; i++) {
@@ -2374,6 +2400,13 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
         return RFNM_API_MIN_QBUF_CNT_NOT_SATIFIED;
     }
 
+    // defect #18: the transport watchdog declared this session's RX pipe unrecoverable
+    // (resync budget spent below a parked board-side producer). Distinct failcode so
+    // clients reopen instead of spinning on NO_DATA against a pipe that will never move.
+    if (rx_pipe_dead_latch.load(std::memory_order_relaxed)) {
+        return RFNM_API_RX_PIPE_DEAD;
+    }
+
     switch (ch_ids) {
     case CH0:
     case CH1:
@@ -2417,8 +2450,12 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
             std::unique_lock lk(rx_s.out_mutex);
             rx_s.cv.wait_for(lk, std::chrono::microseconds(timeout_us),
                 [this, required_adc_id] { return dqbuf_is_cc_continuous(required_adc_id, 0) ||
-                rx_s.out[required_adc_id].size() > RX_RECOMB_BUF_LEN; }
+                rx_s.out[required_adc_id].size() > RX_RECOMB_BUF_LEN ||
+                rx_pipe_dead_latch.load(std::memory_order_relaxed); }
             );
+            if (rx_pipe_dead_latch.load(std::memory_order_relaxed)) {
+                return RFNM_API_RX_PIPE_DEAD;   // latched mid-wait (the watchdog notifies)
+            }
 
             // timeout-expiry anchor: an unanchored cc after a full client timeout means the
             // init window will never fill (sparse scheduled capture, or a slow full-record

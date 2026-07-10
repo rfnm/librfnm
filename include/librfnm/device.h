@@ -470,6 +470,15 @@ namespace rfnm {
         // bumped by rx_work_start when the workers (re)activate: tells the USB RX engine
         // to re-arm its dead-pipe watchdog baselines for the new session
         std::atomic<uint32_t> rx_work_generation{ 0 };
+        // defect #18: latched by the USB RX watchdog when SET_INTERFACE resyncs stop
+        // helping (2 consecutive resyncs with zero progress after them). A resync can
+        // only re-arm the endpoints BELOW a stopped board-side producer - hammering it
+        // ESHUTDOWN-storms the gadget back into the same frozen state forever, so past
+        // the budget the watchdog stops resyncing and fails LOUDLY instead: rx_dqbuf
+        // returns RFNM_API_RX_PIPE_DEAD while this is set. Recovery is the client's
+        // (reopen the device = SM reset re-rolls the board-side lottery); cleared by
+        // rx_work_start so a torn-down-and-restarted session gets a fresh verdict.
+        std::atomic<bool> rx_pipe_dead_latch{ false };
 
 
         
