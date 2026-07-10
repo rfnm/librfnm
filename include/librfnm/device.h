@@ -267,6 +267,14 @@ namespace rfnm {
         // and the partial-RX-packet flush deadline in us (bounds worst-case RX
         // delivery latency). Fetches a fresh dev_status.
         MSDLL rfnm_api_failcode get_feed_contract(uint32_t *tx_feed_lead_ticks, uint32_t *rx_flush_deadline_us);
+
+        // #19 pump-event telemetry: cumulative device-side self-heal counters (since
+        // module load - snapshot at session start, diff at the incident). tx_pace_rolls
+        // = mispaced-start regate requests from the kernel TX pace check; tx_arm_repairs
+        // = self-heal re-applies that carried TX (client-invisible tx_t0/tx_epoch
+        // re-mints + fw GO-detect repair opportunities). Refreshes dev_status like the
+        // other timing getters, so the read never races a stale worker poll.
+        MSDLL rfnm_api_failcode get_tx_pump_stats(uint32_t *tx_pace_rolls, uint32_t *tx_arm_repairs);
         // ---- v3: absolute-time scheduling (transport-general) ----
         // Requests are stamped with the ABSOLUTE phytimer tick at which they execute
         // (same domain as get_phytimer / the RX stamps), monotonic by tick, >= 150 us

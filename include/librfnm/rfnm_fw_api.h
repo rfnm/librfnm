@@ -289,6 +289,16 @@ RFNM_PACKED_STRUCT(
 	// the ksw module's rfnm_status_ext.h - keep the two in sync.
 	uint32_t tx_feed_lead_ticks;	// TX pump feed lead in phytimer ticks (rate-aware)
 	uint32_t rx_flush_deadline_us;	// partial RX packet flush deadline
+
+	// #19 pump-event telemetry (module-side cumulative counters since insmod, never
+	// reset - diff across a session): tx_pace_rolls = mispaced-start regate REQUESTS
+	// from the kernel TX pace check; tx_arm_repairs = self-heal stream re-applies that
+	// carried TX - each one re-mints tx_t0/tx_epoch behind the client's back and hands
+	// the fw one GO-detect arm-repair opportunity (the actual fw repair firing is only
+	// visible on the M4 console; this is the kernel-visible proxy). A mid-session
+	// quality collapse that correlates with a bump here was a pump event, not RF.
+	uint32_t tx_pace_rolls;
+	uint32_t tx_arm_repairs;
 }
 );
 

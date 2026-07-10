@@ -3208,6 +3208,19 @@ MSDLL rfnm_api_failcode device::get_feed_contract(uint32_t *tx_feed_lead_ticks, 
     return RFNM_API_OK;
 }
 
+MSDLL rfnm_api_failcode device::get_tx_pump_stats(uint32_t *tx_pace_rolls, uint32_t *tx_arm_repairs) {
+    if (get(REQ_DEV_STATUS)) {
+        return RFNM_API_USB_FAIL;
+    }
+    if (tx_pace_rolls) {
+        *tx_pace_rolls = s->dev_status.tx_pace_rolls;
+    }
+    if (tx_arm_repairs) {
+        *tx_arm_repairs = s->dev_status.tx_arm_repairs;
+    }
+    return RFNM_API_OK;
+}
+
 // ---- v3 phase 1: the absolute-time request ring ----
 
 MSDLL rfnm_api_failcode device::schedule_reset() {
