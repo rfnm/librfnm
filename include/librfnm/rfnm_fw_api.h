@@ -343,6 +343,16 @@ typedef enum {
 	RFNM_API_MIN_QBUF_CNT_NOT_SATIFIED = 10,
 	RFNM_API_MIN_QBUF_QUEUE_FULL = 11,
 	//RFNM_API_DQBUF_UNDERRUN = 7,
+
+	// scheduling rejects (client-side only, never on the wire). Synchronous on the
+	// LOCAL transport; USB/TCP schedule SETs are fire-and-forget - their rejects
+	// surface through dev_status counters / tx_health and the board-side dmesg.
+	RFNM_API_SCHED_NO_ANCHOR = 12,	// no TX epoch published yet - stream not started
+	RFNM_API_SCHED_MISALIGNED = 13,	// tick not on the slot grid (t0 + n*ticks_per_slot)
+	RFNM_API_SCHED_LATE = 14,	// below the producer lead floor (kernel ETIME)
+	RFNM_API_SCHED_FULL = 15,	// request ring full (kernel ENOSPC)
+	RFNM_API_SCHED_ORDER = 16,	// non-monotonic tick (kernel EINVAL)
+	RFNM_API_SCHED_NOT_RESET = 17,	// ring never schedule_reset() (kernel ENXIO)
 } rfnm_api_failcode;
 
 #define RFNM_RX_USB_BUF_MULTI 80

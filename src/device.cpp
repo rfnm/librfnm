@@ -2684,13 +2684,23 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
         case RFNM_SET_TXN:
             memcpy(&ep_ctrl_buf[0], buf, size);
             if (ioctl(rfnm_ctrl_ep_ioctl, RFNM_IOCTL_BASE + (0xff & type), &ep_ctrl_buf) < 0) {
+                // LOCAL is the one transport with a synchronous reject path: the txn
+                // push errno says WHY (USB/TCP schedule SETs are fire-and-forget)
+                if (type == RFNM_SET_TXN) {
+                    switch (errno) {
+                    case ETIME: return RFNM_API_SCHED_LATE;
+                    case ENOSPC: return RFNM_API_SCHED_FULL;
+                    case EINVAL: return RFNM_API_SCHED_ORDER;
+                    case ENXIO: return RFNM_API_SCHED_NOT_RESET;
+                    }
+                }
                 goto exit_error_local;
             }
             break;
         }
         return RFNM_API_OK;
     exit_error_local:
-        spdlog::error("ioctl control transfer for req type {} failed with code {}", (int)type, r);
+        spdlog::error("ioctl control transfer for req type {} failed with errno {}", (int)type, errno);
         return RFNM_API_USB_FAIL;
 #endif
     }
@@ -3109,8 +3119,11 @@ MSDLL rfnm_api_failcode device::get_phytimer(uint64_t *tick) {
 
 MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tick) {
     uint64_t ticks_per_slot = 128ull << s->dev_status.tx_r_shift;
-    if (!s->dev_status.tx_epoch || ((tick - s->dev_status.tx_t0) % ticks_per_slot)) {
-        return RFNM_API_NOT_SUPPORTED;
+    if (!s->dev_status.tx_epoch) {
+        return RFNM_API_SCHED_NO_ANCHOR;
+    }
+    if ((tick - s->dev_status.tx_t0) % ticks_per_slot) {
+        return RFNM_API_SCHED_MISALIGNED;
     }
     buf->phytimer = (uint32_t)tick;
     buf->tx_flags = RFNM_TX_FLAG_TIME_VALID | ((s->dev_status.tx_epoch & 0xFF) << 8);
@@ -3715,6 +3728,18 @@ MSDLL const char* device::failcode_to_string(rfnm_api_failcode code) {
         return "Minimum queue buffer count not satisfied";
     case RFNM_API_MIN_QBUF_QUEUE_FULL:
         return "Minimum queue buffer is full";
+    case RFNM_API_SCHED_NO_ANCHOR:
+        return "Schedule rejected: no TX anchor published yet (stream not started)";
+    case RFNM_API_SCHED_MISALIGNED:
+        return "Schedule rejected: tick not on the slot grid";
+    case RFNM_API_SCHED_LATE:
+        return "Schedule rejected: below the producer lead floor";
+    case RFNM_API_SCHED_FULL:
+        return "Schedule rejected: request ring full";
+    case RFNM_API_SCHED_ORDER:
+        return "Schedule rejected: non-monotonic tick";
+    case RFNM_API_SCHED_NOT_RESET:
+        return "Schedule rejected: ring never reset (call schedule_reset first)";
     default:
         return "Unknown error code";
     }
