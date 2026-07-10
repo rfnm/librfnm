@@ -399,6 +399,12 @@ typedef enum {
 #define RFNM_RX_FLAG_DISCONT		(1u << 0)	// device self-heal re-gate happened right before this packet
 #define RFNM_TX_FLAG_TIME_VALID		(1u << 0)	// gate at exactly phytimer (phase 3)
 #define RFNM_TX_FLAG_EOB		(1u << 1)	// gate closes after this packet (phase 3)
+// positional free-run (defect #20): phytimer = exact tick of the packet's first sample
+// (same semantic as TIME_VALID, but the stream free-runs - the device PLACES the
+// payload at the tick's ring slot instead of gating a window). Stamped automatically
+// by tx_qbuf against the last apply's anchor; epoch rides [15:8]. Late/stale/off-grid
+// packets are dropped device-side, counted in the rfnm_tx_stat_pos_* module params.
+#define RFNM_TX_FLAG_POS_VALID		(1u << 2)
 #define RFNM_STREAM_FLAG_EPOCH(f)	(((f) >> 8) & 0xFF)	// RX stream generation of the stamps in this packet
 
 RFNM_PACKED_STRUCT(

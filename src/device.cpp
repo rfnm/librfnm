@@ -2082,6 +2082,23 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     tx_s.usb_cc++;
 
     buf->usb_cc = (uint32_t)tx_s.usb_cc;
+
+    // positional free-run stamping (defect #20): every non-TIME_VALID packet carries
+    // the exact tick of its first sample, computed from the last apply's anchor and
+    // the cumulative feed position - the device places it at that ring slot, so
+    // "feed position 0 airs at tx_t0" holds exactly instead of re-rolling per session
+    // with the align-to-live-tail race. R = 2^tx_r_shift / 2 ticks per sample (exact;
+    // packets are 256-sample multiples, so the >>1 never truncates). The TX epoch
+    // rides flags[15:8]: the device drops stamps minted against a torn-down anchor.
+    if (!(buf->tx_flags & RFNM_TX_FLAG_TIME_VALID) && s->dev_status.tx_epoch) {
+        uint32_t samples = buf->elem_cnt ? buf->elem_cnt : RFNM_USB_TX_PACKET_ELEM_CNT;
+        buf->phytimer = s->dev_status.tx_t0 +
+                (uint32_t)((tx_s.feed_pos << s->dev_status.tx_r_shift) >> 1);
+        buf->tx_flags = RFNM_TX_FLAG_POS_VALID | ((s->dev_status.tx_epoch & 0xFF) << 8) |
+                (buf->tx_flags & RFNM_TX_FLAG_EOB);
+        tx_s.feed_pos += samples;
+    }
+
     tx_s.in.push(buf);
 
     tx_s.cv.notify_one();
@@ -2953,6 +2970,15 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
                     if ((channel_flags[q] & applies_ch_rx) && r_res.rx_ecodes[q]) {
                         return (rfnm_api_failcode)r_res.rx_ecodes[q];
                     }
+                }
+                if (applies_ch_tx) {
+                    // refresh the timing anchor for positional stamping (the fw
+                    // publishes it synchronously inside the apply - defect #13) and
+                    // restart the feed position: this apply minted a fresh tx_t0 and
+                    // rebased the ring, so feed position 0 airs at the new anchor
+                    get(REQ_DEV_STATUS);
+                    std::lock_guard<std::mutex> lg(tx_s.in_mutex);
+                    tx_s.feed_pos = 0;
                 }
                 return RFNM_API_OK;
             }

@@ -190,6 +190,11 @@ namespace rfnm {
         std::condition_variable cv;
         uint64_t usb_cc;
         uint64_t qbuf_cnt;
+        // positional free-run stamping (defect #20): cumulative samples fed since the
+        // last TX-enabling apply(). tx_qbuf stamps every non-TIME_VALID packet with
+        // tx_t0 + feed_pos*R (POS_VALID), so the device places it at its exact ring
+        // slot - "feed position 0 airs at tx_t0" is a contract, not an accident.
+        uint64_t feed_pos;
     };
 
     struct thread_data_s {
