@@ -897,6 +897,17 @@ void device::threadfn(size_t thread_index) {
                 // one that just re-armed endpoints below a stopped producer does not - two
                 // of those in a row and the pipe is declared unrecoverable (latch below).
                 static thread_local uint32_t wd_resyncs_no_progress = 0;
+                // #18 residual (round 4): the trickle-dead face. A 0.5 Msps stream of
+                // partials reaps URBs constantly, so the pure-silence gate never fires
+                // and the old per-URB budget reset kept the latch unreachable across
+                // whole dead sessions. Judge RATE instead: samples delivered per 2 s
+                // window vs the set rate; under 2% (floor 100 kS/s-equivalent) counts
+                // as dead for CONTINUOUS sessions (scheduled sessions trickle by
+                // design), and only a healthy-rate window heals the resync budget.
+                static thread_local uint64_t wd_win_samples = 0;
+                static thread_local bool wd_rate_starved = false;
+                static thread_local std::chrono::high_resolution_clock::time_point wd_win_start;
+                static thread_local bool wd_win_started = false;
                 auto rx_tstart = std::chrono::high_resolution_clock::now();
                 if (wd_generation != rx_work_generation) {
                     // new rx session: re-arm. The progress baseline must not carry a previous
@@ -913,6 +924,34 @@ void device::threadfn(size_t thread_index) {
                     wd_gap_counted = false;
                     wd_resyncs_no_progress = 0;
                     rx_last_progress = rx_tstart;
+                    wd_win_samples = 0;
+                    wd_rate_starved = false;
+                    wd_win_start = rx_tstart;
+                    wd_win_started = true;
+                }
+                if (!wd_win_started) {
+                    wd_win_start = rx_tstart;
+                    wd_win_started = true;
+                }
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - wd_win_start).count() >= 2000) {
+                    uint64_t rate = tx_s.samp_rate_hz;
+                    double win_s = std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - wd_win_start).count() / 1000.0;
+                    double floor_sps = rate ? std::max((double)rate * 0.02, 100000.0) : 0.0;
+                    bool starved_now = rate && !rx_scheduled_session &&
+                            (double)wd_win_samples < floor_sps * win_s;
+                    if (starved_now && !wd_rate_starved) {
+                        spdlog::warn("RX rate-starved: {} samples in {:.1f} s vs {} S/s set ({}%% floor) - trickle-dead window",
+                            wd_win_samples, win_s, rate, 2);
+                    }
+                    wd_rate_starved = starved_now;
+                    if (!starved_now && wd_win_samples > 0) {
+                        // genuine-rate progress is the ONLY thing that heals the resync
+                        // budget now: a trickle of URBs must not (that reset is what kept
+                        // the r2 latch unreachable for whole dead sessions)
+                        wd_resyncs_no_progress = 0;
+                    }
+                    wd_win_samples = 0;
+                    wd_win_start = rx_tstart;
                 }
                 // UDC stall recovery, host-driven: if the pipe is dead while URBs are
                 // pending, the gadget's UDC has stopped mapping requests to TRBs (a
@@ -941,7 +980,8 @@ void device::threadfn(size_t thread_index) {
                 // backstop unchanged (a resync there is cheap and possibly the only way out).
                 bool rx_pipe_dead = false;
                 if (!rx_pipe_dead_latch.load(std::memory_order_relaxed) &&
-                        std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - rx_last_progress).count() > 2000) {
+                        (wd_rate_starved ||
+                         std::chrono::duration_cast<std::chrono::milliseconds>(rx_tstart - rx_last_progress).count() > 2000)) {
                     if (!rx_scheduled_session) {
                         rx_pipe_dead = true;
                     } else {
@@ -1047,6 +1087,11 @@ void device::threadfn(size_t thread_index) {
                     wd_dead_pending = false;
                     rx_reap_rr = 0;
                     rx_last_progress = std::chrono::high_resolution_clock::now();
+                    // fresh rate window: the resynced pipe gets a full 2 s to prove a real
+                    // rate before the next starved verdict (or the latch at budget 2)
+                    wd_win_samples = 0;
+                    wd_win_start = rx_last_progress;
+                    wd_rate_starved = false;
                 }
                 while (got_ep < 0) {
                     // fair rotation across endpoints: preferential draining of one endpoint
@@ -1102,7 +1147,10 @@ void device::threadfn(size_t thread_index) {
                     break;
                 }
                 rx_last_progress = std::chrono::high_resolution_clock::now();
-                wd_resyncs_no_progress = 0;     // real URB progress: the last resync (if any) genuinely healed
+                // NOTE (#18 round 4): a reaped URB is liveness for the SILENCE gate only.
+                // The resync budget heals exclusively on a healthy-RATE window above -
+                // the old per-URB reset here is what made the trickle-dead face
+                // unlatchable (partials reap constantly at 0.5 Msps).
                 {
                     int q = arz.next_reap[got_ep];
                     transferred = arz.xfer[got_ep][q]->actual_length;
@@ -1130,6 +1178,7 @@ void device::threadfn(size_t thread_index) {
                     rx_s.cv.notify_one();
                     goto skip_rx;
                 }
+                wd_win_samples += lrxbuf->elem_cnt;    // rate-window intake (validated packets only)
             }
 
             if (s->transport_status.transport == TRANSPORT_LOCAL) {
@@ -3067,6 +3116,10 @@ MSDLL rfnm_api_failcode device::set_samp_rate(uint64_t freq, uint32_t timeout_us
             // refresh the client-visible hwinfo with the device's value
             if (get(REQ_HWINFO)) {
                 return RFNM_API_USB_FAIL;
+            }
+            if (r_res.samp_rate_ecode == 0) {
+                // cache for the RX dead-pipe watchdog's trickle judgment (defect #18)
+                tx_s.samp_rate_hz = freq;
             }
             return (rfnm_api_failcode)r_res.samp_rate_ecode;
         }

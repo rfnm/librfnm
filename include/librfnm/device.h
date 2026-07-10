@@ -195,6 +195,10 @@ namespace rfnm {
         // tx_t0 + feed_pos*R (POS_VALID), so the device places it at its exact ring
         // slot - "feed position 0 airs at tx_t0" is a contract, not an accident.
         uint64_t feed_pos;
+        // last successfully applied sample rate: the RX dead-pipe watchdog judges
+        // "trickle-dead" (defect #18 residual) against it - 0 = unknown, watchdog
+        // falls back to pure-silence semantics
+        uint64_t samp_rate_hz;
     };
 
     struct thread_data_s {
