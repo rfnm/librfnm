@@ -276,6 +276,18 @@ namespace rfnm {
         // and the partial-RX-packet flush deadline in us (bounds worst-case RX
         // delivery latency). Fetches a fresh dev_status.
         MSDLL rfnm_api_failcode get_feed_contract(uint32_t *tx_feed_lead_ticks, uint32_t *rx_flush_deadline_us);
+        // v3 bundle: the HONEST usable write-lead minimum (placement guard + publish
+        // staleness allowance) - budget from this, not the conservative advisory above.
+        MSDLL rfnm_api_failcode get_feed_min_lead(uint32_t *tx_feed_min_lead_ticks);
+        // v3 bundle: POS placement outcomes, device-side cumulative (snapshot at
+        // session start, diff at the incident). Nonzero late/stale/misaligned deltas
+        // during your session are YOUR dropped feed - the "client counters read clean
+        // while the kernel dropped 92%" hole, closed.
+        MSDLL rfnm_api_failcode get_tx_pos_stats(uint32_t *placed, uint32_t *late,
+                uint32_t *stale, uint32_t *misaligned);
+        // v3 bundle: the anchor congruence step (ticks) for the applied stream word -
+        // consume this instead of re-deriving 384<<dcs from cached hwinfo.
+        MSDLL rfnm_api_failcode get_anchor_step(uint32_t *step_ticks);
 
         // #19 pump-event telemetry: cumulative device-side self-heal counters (since
         // module load - snapshot at session start, diff at the incident). tx_pace_rolls

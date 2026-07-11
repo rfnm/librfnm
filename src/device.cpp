@@ -3369,6 +3369,46 @@ MSDLL rfnm_api_failcode device::get_feed_contract(uint32_t *tx_feed_lead_ticks, 
     return RFNM_API_OK;
 }
 
+MSDLL rfnm_api_failcode device::get_feed_min_lead(uint32_t *tx_feed_min_lead_ticks) {
+    if (get(REQ_DEV_STATUS)) {
+        return RFNM_API_USB_FAIL;
+    }
+    if (tx_feed_min_lead_ticks) {
+        *tx_feed_min_lead_ticks = s->dev_status.tx_feed_min_lead_ticks;
+    }
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::get_tx_pos_stats(uint32_t *placed, uint32_t *late,
+        uint32_t *stale, uint32_t *misaligned) {
+    if (get(REQ_DEV_STATUS)) {
+        return RFNM_API_USB_FAIL;
+    }
+    if (placed) {
+        *placed = s->dev_status.tx_pos_placed;
+    }
+    if (late) {
+        *late = s->dev_status.tx_pos_late;
+    }
+    if (stale) {
+        *stale = s->dev_status.tx_pos_stale;
+    }
+    if (misaligned) {
+        *misaligned = s->dev_status.tx_pos_misaligned;
+    }
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::get_anchor_step(uint32_t *step_ticks) {
+    if (get(REQ_DEV_STATUS)) {
+        return RFNM_API_USB_FAIL;
+    }
+    if (step_ticks) {
+        *step_ticks = s->dev_status.sched_anchor_step_ticks;
+    }
+    return RFNM_API_OK;
+}
+
 MSDLL rfnm_api_failcode device::get_tx_pump_stats(uint32_t *tx_pace_rolls, uint32_t *tx_arm_repairs) {
     if (get(REQ_DEV_STATUS)) {
         return RFNM_API_USB_FAIL;

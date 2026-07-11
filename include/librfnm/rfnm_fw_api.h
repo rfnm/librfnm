@@ -299,6 +299,29 @@ RFNM_PACKED_STRUCT(
 	// quality collapse that correlates with a bump here was a pump event, not RF.
 	uint32_t tx_pace_rolls;
 	uint32_t tx_arm_repairs;
+
+	// ---- protocol v3 bundle (r6-5b, 2026-07-11; mirrors ksw rfnm_status_ext.h) ----
+	// POS placement outcomes, cumulative since module load (diff across a session):
+	// the client-side answer to "my counters read clean while the kernel dropped 92%"
+	// (the OAI UL night). Any nonzero delta of late/stale/misaligned during YOUR
+	// session is YOUR feed - loud in dmesg board-side, now visible here too.
+	uint32_t tx_pos_placed;
+	uint32_t tx_pos_late;
+	uint32_t tx_pos_stale;
+	uint32_t tx_pos_misaligned;
+	// honest usable write-lead minimum in phytimer ticks: the 16-slot placement
+	// guard + a 1 ms publish/staleness allowance (r6's measured 1.0-1.2 ms floor).
+	// tx_feed_lead_ticks above stays the historical (conservative) advisory.
+	uint32_t tx_feed_min_lead_ticks;
+	// the anchor congruence step anchors mint on (384 << max(rx_dcs, tx_dcs)),
+	// computed device-side from the APPLIED stream word - consume this, never
+	// re-derive from cached hwinfo (the r4b anchor_at_probe folklore).
+	uint32_t sched_anchor_step_ticks;
+	// RESERVED (read 0) until their producers land: AXIQ-vs-DDR-RD underrun split
+	// (needs the VSPA DMEM aperture proven) and the kernel slip engine (#23).
+	uint32_t tx_underrun_axiq;
+	uint32_t tx_underrun_ddr_rd;
+	uint32_t tx_slip_ticks;
 }
 );
 
@@ -484,7 +507,7 @@ RFNM_PACKED_STRUCT(
 #define RFNM_LOCAL_MMAP_RX_OFFSET 0x0UL
 #define RFNM_LOCAL_MMAP_TX_OFFSET 0x10000000UL
 
-#define RFNM_PROTOCOL_VERSION 2
+#define RFNM_PROTOCOL_VERSION 3
 #define RFNM_UDP_CTRL_PORT 28285
 #define RFNM_UDP_DATA_PORT 28286
 #define RFNM_TCP_CTRL_PORT 28287
