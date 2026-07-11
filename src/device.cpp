@@ -1613,20 +1613,21 @@ void device::threadfn(size_t thread_index) {
             // 5 ms status lag forces deep pipelines (or underruns), so poll at >=1 ms.
             if (ms_int.count() > 1) {
 
-
-                if (s->transport_status.transport == TRANSPORT_TCP) {
-                    // NOTE: Retransmission would need to be reimplemented for TCP
-                    // TCP already handles retransmission at the protocol level
-                    // This section can be removed or replaced with TCP-specific error handling
+                // r5 2 ms hard-lead: (a) the TX-submit thread (0) never blocks on a
+                // status RTT while TX work is queued - thread 1 keeps the 1 ms
+                // freshness; (b) the blocking control transfer runs WITHOUT
+                // s_dev_status_mutex (tx_qbuf takes that mutex to stamp every packet -
+                // holding it across a ctrl RTT at 1 kHz stalled stamping and pickup by
+                // up to the RTT). The mutex now guards only the memcpy. Rare duplicate
+                // polls (both threads inside the 1 ms window) serialize in libusb and
+                // just refresh twice - harmless.
+                bool tx_work_pending = false;
+                if (thread_index == 0) {
+                    std::lock_guard<std::mutex> lg(tx_s.in_mutex);
+                    tx_work_pending = !tx_s.in.empty();
                 }
-
-                //if (s_dev_status_mutex.try_lock())
-                std::unique_lock<std::mutex> lock(s_dev_status_mutex, std::try_to_lock);
-                if (lock)
+                if (!tx_work_pending)
                 {
-                    //std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
-
-
                     struct rfnm_dev_status dev_status[1];
 
                     if (/*(rand() % 10 == 0) ||*/ control_transfer(RFNM_GET_DEV_STATUS, sizeof(struct rfnm_dev_status), (unsigned char*)&dev_status[0], 50) != RFNM_API_OK) {
@@ -1644,21 +1645,10 @@ void device::threadfn(size_t thread_index) {
                         }
                     }
                     else {
+                        std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
                         memcpy(&s->dev_status, &dev_status[0], sizeof(struct rfnm_dev_status));
                         s->last_dev_time = high_resolution_clock::now();
-                        uint64_t tt = s->dev_status.usb_dac_last_dqbuf[0];
-
-                        /*spdlog::info("control_transfer for RFNM_GET_DEV_STATUS OK {} {} adc {} {} {} {}", tx_s.usb_cc, tt,
-
-                        static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[0]),
-                    static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[1]),
-                static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[2]),
-            static_cast<uint64_t>(s->dev_status.usb_adc_last_qbuf[3])
-        );*/
-
                     }
-
-                    //s_dev_status_mutex.unlock();
                 }
             }
         }
