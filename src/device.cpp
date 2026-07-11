@@ -1223,8 +1223,29 @@ void device::threadfn(size_t thread_index) {
                 bool tcp_rx_ok = false;
                 {
                     std::lock_guard<std::mutex> lock(tcp_data_rx_mutex);
-                    // read_exact reads exactly RFNM_USB_RX_PACKET_SIZE bytes or fails as a lump (asio::read semantics)
-                    tcp_rx_ok = net::read_exact(tcp_data_socket.h, (uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_SIZE);
+                    // r6-eth v2 framing: head first, then exactly the declared PACKED12
+                    // payload (elem_cnt * 3) - the RX wire now mirrors the TX direction's
+                    // variable framing. Fixed full-size records floored RX latency at the
+                    // 80-slot fill (333 us at 61.44M) and made the rx_ship_slots /
+                    // partial-flush levers TCP-dead. BREAKING wire change - deploy with
+                    // the rfnm_eth v2 sender (no compat layers before librfnm v2 by
+                    // project rule; a v1 board desyncs loudly on the magic check).
+                    tcp_rx_ok = net::read_exact(tcp_data_socket.h, (uint8_t*)lrxbuf, RFNM_USB_RX_PACKET_HEAD_SIZE);
+                    if (tcp_rx_ok) {
+                        if (lrxbuf->magic != 0x7ab8bd6f || lrxbuf->elem_cnt == 0 ||
+                                lrxbuf->elem_cnt > RFNM_USB_RX_PACKET_ELEM_CNT) {
+                            // a reliable byte stream only desyncs on a protocol bug (or a
+                            // v1 sender) - poison the socket so the session fails loudly
+                            // instead of spraying garbage packets upward
+                            spdlog::error("TCP RX framing lost (magic {:x} elem_cnt {}) - v1 board or protocol bug, dropping connection",
+                                (uint32_t)lrxbuf->magic, (uint32_t)lrxbuf->elem_cnt);
+                            net::sock_shutdown(tcp_data_socket.h);
+                            tcp_rx_ok = false;
+                        } else {
+                            tcp_rx_ok = net::read_exact(tcp_data_socket.h, (uint8_t*)lrxbuf->buf,
+                                (size_t)lrxbuf->elem_cnt * 3);
+                        }
+                    }
 
                     if (tcp_rx_ok) {
                         if (rx_s.usb_cc[lrxbuf->adc_id] != UINT64_MAX && lrxbuf->usb_cc < rx_s.usb_cc[lrxbuf->adc_id]) {
@@ -1631,12 +1652,12 @@ void device::threadfn(size_t thread_index) {
                 // (pacing feedback lag ~6 packets vs the 2000-packet cc window).
                 // RFNM_STATUS_POLL_LEGACY=1 restores the r5 gate (A/B lever).
                 bool tx_work_pending = false;
+                static const bool poll_legacy = getenv("RFNM_STATUS_POLL_LEGACY") != nullptr;
                 if (thread_index == 0) {
                     {
                         std::lock_guard<std::mutex> lg(tx_s.in_mutex);
                         tx_work_pending = !tx_s.in.empty();
                     }
-                    static const bool poll_legacy = getenv("RFNM_STATUS_POLL_LEGACY") != nullptr;
                     if (!tx_work_pending && !poll_legacy && tpm.tx_active &&
                             s->transport_status.transport == TRANSPORT_USB) {
                         if (thread_data[1].rx_active) {
@@ -1645,6 +1666,18 @@ void device::threadfn(size_t thread_index) {
                             tx_work_pending = true;    // solo backstop cadence
                         }
                     }
+                }
+                // r6-eth: over TCP the ctrl RTT (wire + sched, ~100-300 us vs USB's
+                // 56 us) rides the SAME thread as the data recv - a 1 kHz blocking
+                // poll on thread 1 stalls one data packet per RTT per millisecond of
+                // a full-rate stream. Thread 0 owns the 1 ms cadence for TCP (its
+                // gate above only skips while TX work is queued); thread 1 backstops
+                // at 3 ms staleness so RX-only sessions and saturated-TX shapes
+                // (thread 0 permanently queued) never go stale.
+                if (thread_index == 1 && !poll_legacy &&
+                        s->transport_status.transport == TRANSPORT_TCP &&
+                        ms_int.count() <= 3) {
+                    tx_work_pending = true;    // reuse the skip flag
                 }
                 if (!tx_work_pending)
                 {
