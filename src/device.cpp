@@ -210,7 +210,10 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
             reset_device_state();
 
             s->transport_status.transport = TRANSPORT_USB;
-            THREAD_COUNT = MAX_THREAD_COUNT;
+            // both USB data engines are async single-reaper designs (thread 1 = RX URB
+            // ring across all 4 IN endpoints, thread 0 = TX URB ring on the one ordered
+            // OUT endpoint) - the other 14 threads of the sync-read era only slept
+            THREAD_COUNT = 2;
 
             {
                 rfnm_api_failcode gr = get(REQ_ALL);
@@ -679,11 +682,6 @@ MSDLL device::~device() {
     delete s;
 }
 
-static std::unordered_map<uint64_t, std::chrono::steady_clock::time_point> last_retx_time;
-static std::mutex last_retx_mutex;
-static constexpr auto RETRANS_BACKOFF = std::chrono::milliseconds(5);
-
-
 void device::reorder_tx_queue_nolock(tx_buf_s& tx_s) {
     //std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
 
@@ -702,12 +700,6 @@ void device::reorder_tx_queue_nolock(tx_buf_s& tx_s) {
         tx_s.in.push(buf);
     }
 }
-#pragma pack(push,1)
-struct retrans_req_entry {
-    uint64_t seq;
-    uint32_t adc;
-};
-#pragma pack(pop)
 
 
 
@@ -722,15 +714,17 @@ struct usb_tx_async_state {
     libusb_transfer* xfer[RFNM_TX_ASYNC_URBS];
     uint8_t* xbuf[RFNM_TX_ASYNC_URBS];
     rfnm::tx_buf* app[RFNM_TX_ASYNC_URBS];
-    // 0 = free, 1 = in flight, 2 = done-ok, 3 = done-error (all set/read on the TX thread;
-    // libusb callbacks run inside libusb_handle_events on the same thread)
-    int state[RFNM_TX_ASYNC_URBS];
+    // 0 = free, 1 = in flight, 2 = done-ok, 3 = done-error. Atomic because BOTH worker
+    // threads pump the shared default libusb context: a TX completion can be delivered
+    // inside the RX thread's libusb_handle_events call (and vice versa), so the
+    // callback's store needs a happens-before edge to the owning thread's reads.
+    std::atomic<int> state[RFNM_TX_ASYNC_URBS];
     int initialized;
 };
 
 static void rfnm_usb_tx_async_cb(struct libusb_transfer* t) {
-    int* slot_state = (int*)t->user_data;
-    *slot_state = (t->status == LIBUSB_TRANSFER_COMPLETED && t->actual_length == t->length) ? 2 : 3;
+    auto* slot_state = (std::atomic<int>*)t->user_data;
+    slot_state->store((t->status == LIBUSB_TRANSFER_COMPLETED && t->actual_length == t->length) ? 2 : 3);
 }
 
 // async pipelined RX on all four IN endpoints (the RX mirror of the TX engine above).
@@ -746,16 +740,29 @@ static void rfnm_usb_tx_async_cb(struct libusb_transfer* t) {
 struct usb_rx_async_state {
     libusb_transfer* xfer[RFNM_RX_ASYNC_EPS][RFNM_RX_ASYNC_URBS_PER_EP];
     uint8_t* xbuf[RFNM_RX_ASYNC_EPS][RFNM_RX_ASYNC_URBS_PER_EP];
-    int state[RFNM_RX_ASYNC_EPS][RFNM_RX_ASYNC_URBS_PER_EP];  // 0 unsubmitted, 1 in flight, 2 done, 3 failed
+    // 0 unsubmitted, 1 in flight, 2 done, 3 failed (atomic for the same cross-thread
+    // completion delivery as the TX engine above)
+    std::atomic<int> state[RFNM_RX_ASYNC_EPS][RFNM_RX_ASYNC_URBS_PER_EP];
     int next_reap[RFNM_RX_ASYNC_EPS];
     int initialized;
 };
 static void rfnm_usb_rx_async_cb(struct libusb_transfer* t) {
-    int* slot_state = (int*)t->user_data;
-    *slot_state = (t->status == LIBUSB_TRANSFER_COMPLETED) ? 2 : 3;
+    auto* slot_state = (std::atomic<int>*)t->user_data;
+    slot_state->store((t->status == LIBUSB_TRANSFER_COMPLETED) ? 2 : 3);
 }
 // -------------------------------------------------------------------------------------
 
+
+// rx_s.cv used to serve both queue directions: waited under rx_s.in_mutex (the RX
+// worker's buffer-starvation nap) AND under rx_s.out_mutex (rx_dqbuf) - and a
+// std::condition_variable with two different mutexes across concurrent waiters is
+// formally UB. The worker side is a predicate-less bounded nap (a notify racing the
+// wait start was already just one <=1ms oversleep), so it moves to this statically
+// paired cv and rx_s.cv keeps exactly one mutex (out_mutex). Shared across device
+// instances by design: notifiers use notify_all and every waiter re-checks its own
+// queue after the bounded wait, so a cross-device wake is a benign early re-check.
+static std::mutex rfnm_rx_in_nap_mutex;
+static std::condition_variable rfnm_rx_in_nap_cv;
 
 void device::threadfn(size_t thread_index) {
     // USB/TCP stage packets here; the local transport points lrxbuf/ltxbuf into the
@@ -805,11 +812,6 @@ void device::threadfn(size_t thread_index) {
             }
         }
 
-        if (s->transport_status.transport == TRANSPORT_TCP && (tpm.ep_id % 2) == 0) {
-            //   goto skip_rx;
-                //receiver is blocking, so skip it in half the threads... 
-        }
-
 
 
         if (tpm.rx_active) {
@@ -842,7 +844,12 @@ void device::threadfn(size_t thread_index) {
             {
                 std::unique_lock lk(rx_s.in_mutex);
                 if (rx_s.in.empty()) {
-                    rx_s.cv.wait_for(lk, std::chrono::microseconds(1000));
+                    lk.unlock();
+                    {
+                        std::unique_lock nap(rfnm_rx_in_nap_mutex);
+                        rfnm_rx_in_nap_cv.wait_for(nap, std::chrono::microseconds(1000));
+                    }
+                    lk.lock();
                     if (rx_s.in.empty()) {
                         goto skip_rx;
                     }
@@ -857,18 +864,10 @@ void device::threadfn(size_t thread_index) {
                     break;
                 }
 
+                // async engine on the primary handle only (usb_boost_connected was never
+                // set anywhere - the second-cable ping-pong idea never shipped, and the
+                // pump keeps strict per-endpoint ordering on primary)
                 libusb_device_handle* lusb_handle = usb_handle->primary;
-                if (s->transport_status.usb_boost_connected) {
-                    std::lock_guard<std::mutex> lockGuard(s_transport_pp_mutex);
-                    //if (s->transport_status.boost_pp_rx) {
-                    if ((tpm.ep_id % 2) == 0) {
-                        lusb_handle = usb_handle->boost;
-                    }
-                    s->transport_status.boost_pp_rx = !s->transport_status.boost_pp_rx;
-                }
-
-                // async engine (boost handle unused here: single-cable benches leave it
-                // disconnected and the pump keeps strict per-endpoint ordering on primary)
                 static thread_local usb_rx_async_state arz = {};
                 if (getenv("RFNM_DEBUG_STALL")) {
                     static thread_local auto last_census = std::chrono::high_resolution_clock::now();
@@ -1163,7 +1162,7 @@ void device::threadfn(size_t thread_index) {
                 if (got_ep < 0) {
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
-                    rx_s.cv.notify_one();
+                    rfnm_rx_in_nap_cv.notify_all();
                     goto skip_rx;
                 }
                 if (0) {
@@ -1199,7 +1198,7 @@ void device::threadfn(size_t thread_index) {
                     }
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
-                    rx_s.cv.notify_one();
+                    rfnm_rx_in_nap_cv.notify_all();
                     goto skip_rx;
                 }
                 wd_win_samples += lrxbuf->elem_cnt;    // rate-window intake (validated packets only)
@@ -1224,7 +1223,7 @@ void device::threadfn(size_t thread_index) {
                     {
                         std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                         rx_s.in.push(buf);
-                        rx_s.cv.notify_one();
+                        rfnm_rx_in_nap_cv.notify_all();
                     }
                     goto skip_rx;
                 }
@@ -1234,7 +1233,7 @@ void device::threadfn(size_t thread_index) {
                     // benign: the sibling worker won the race for the packet poll() saw
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
-                    rx_s.cv.notify_one();
+                    rfnm_rx_in_nap_cv.notify_all();
                     goto skip_rx;
                 }
                 local_rx_have = 1;
@@ -1275,7 +1274,7 @@ void device::threadfn(size_t thread_index) {
                         if (rx_s.usb_cc[lrxbuf->adc_id] != UINT64_MAX && lrxbuf->usb_cc < rx_s.usb_cc[lrxbuf->adc_id]) {
                             std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                             rx_s.in.push(buf);
-                            rx_s.cv.notify_one();
+                            rfnm_rx_in_nap_cv.notify_all();
                             goto skip_rx;
                         }
 
@@ -1288,7 +1287,7 @@ void device::threadfn(size_t thread_index) {
                 if (!tcp_rx_ok) {
                     std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                     rx_s.in.push(buf);
-                    rx_s.cv.notify_one();
+                    rfnm_rx_in_nap_cv.notify_all();
 
                     //spdlog::error("TCP RX problem: {}", net::last_error_str());
                     goto skip_rx;
@@ -1314,7 +1313,7 @@ void device::threadfn(size_t thread_index) {
 #endif
                 std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
                 rx_s.in.push(buf);
-                rx_s.cv.notify_one();
+                rfnm_rx_in_nap_cv.notify_all();
                 goto skip_rx;
             }
 
@@ -1569,29 +1568,6 @@ void device::threadfn(size_t thread_index) {
                     }
                 }
                 goto read_dev_status;
-
-                r = libusb_bulk_transfer(lusb_handle, (((tpm.ep_id % 4) + 1) | LIBUSB_ENDPOINT_OUT),
-                    (uint8_t*)ltxbuf, tx_wire_len, &transferred, 100);
-                if (r == LIBUSB_ERROR_NO_DEVICE || r == LIBUSB_ERROR_IO) {
-                    // Device was reset or closed, exit gracefully
-                    spdlog::info("Thread {} USB device lost, exiting", thread_index);
-                    break;
-                }
-                else if (r) {
-                    spdlog::error("TX bulk tx fail {} {}", tpm.ep_id, r);
-                    std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
-                    tx_s.in.push(buf);
-                    reorder_tx_queue_nolock(tx_s);
-                    goto read_dev_status;
-                }
-
-                if (transferred != (int)tx_wire_len) {
-                    spdlog::error("thread loop TX usb wrong size, {}, {}", transferred, tpm.ep_id);
-                    std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
-                    tx_s.in.push(buf);
-                    reorder_tx_queue_nolock(tx_s);
-                    goto read_dev_status;
-                }
             }
 
             if (s->transport_status.transport == TRANSPORT_LOCAL) {
@@ -2091,7 +2067,7 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
             thread_data[i].rx_active = ((i % 2) == 1) ? 1 : 0;
         }
         else {
-            thread_data[i].rx_active = 1;
+            thread_data[i].rx_active = (i == 1) ? 1 : 0;  // USB: thread 1 owns the RX URB ring
         }
         thread_data[i].cv.notify_all();
     }
@@ -2156,7 +2132,7 @@ MSDLL rfnm_api_failcode device::rx_qbuf(struct rx_buf* buf, bool new_buffer) {
         if (new_buffer) rx_s.qbuf_cnt++;
         rx_s.in.push(buf);
     }
-    rx_s.cv.notify_one();
+    rfnm_rx_in_nap_cv.notify_all();
     return RFNM_API_OK;
 }
 
@@ -2315,16 +2291,6 @@ void device::dqbuf_overwrite_cc_locked(uint8_t adc_id) {
     }
 }
 
-MSDLL void device::dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock) {
-    if (acquire_lock) {
-        rx_s.out_mutex.lock();
-    }
-    dqbuf_overwrite_cc_locked(adc_id);
-    if (acquire_lock) {
-        rx_s.out_mutex.unlock();
-    }
-}
-
 
 
 MSDLL void device::get_rx_stream_stats(uint64_t &ok, uint64_t &dropped) {
@@ -2373,7 +2339,7 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
             rx_s.out[adc_id].pop();
             rx_s.in.push(buf);
-            rx_s.cv.notify_one();
+            rfnm_rx_in_nap_cv.notify_all();
             queue_size--;
             if (queue_size == 0) {
                 break;
@@ -2484,7 +2450,7 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
             std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
             rx_s.out[adc_id].pop();
             rx_s.in.push(buf);
-            rx_s.cv.notify_one();
+            rfnm_rx_in_nap_cv.notify_all();
 
             // do not log stale for eth transport as it could be retransmitted packets
             if (s->transport_status.transport != TRANSPORT_TCP) {
@@ -2742,7 +2708,22 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
 }
 
 MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
-    std::this_thread::sleep_for(std::chrono::microseconds(timeout_us));
+    // the settle nap exists so in-flight packets land in the queues before the drain
+    // below - that only happens while an RX worker is live. With no active worker it
+    // was 20 ms of dead latency on every rx_stream::start (which flushes pre-apply).
+    if (timeout_us) {
+        bool rx_live = false;
+        for (size_t i = 0; i < THREAD_COUNT; i++) {
+            std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
+            if (thread_data[i].rx_active) {
+                rx_live = true;
+                break;
+            }
+        }
+        if (rx_live) {
+            std::this_thread::sleep_for(std::chrono::microseconds(timeout_us));
+        }
+    }
 
     for (int ch_id = 0; ch_id < MAX_RX_CHANNELS; ch_id++) {
         if (!(ch_ids & channel_flags[ch_id])) continue;
@@ -2756,7 +2737,7 @@ MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
             rx_s.out[adc_id].pop();
             std::lock_guard lock_in(rx_s.in_mutex);
             rx_s.in.push(buf);
-            rx_s.cv.notify_one();
+            rfnm_rx_in_nap_cv.notify_all();
         }
 
         rx_s.usb_cc[adc_id] = UINT64_MAX;
@@ -3551,7 +3532,7 @@ MSDLL const struct rfnm_api_rx_ch* device::get_rx_channel(uint32_t channel) {
 }
 
 MSDLL const struct rfnm_api_tx_ch* device::get_tx_channel(uint32_t channel) {
-    if (channel < MAX_RX_CHANNELS) {
+    if (channel < MAX_TX_CHANNELS) {	// review: was bounds-checked against MAX_RX_CHANNELS
         return &(s->tx.ch[channel]);
     }
     else {
@@ -4073,6 +4054,8 @@ MSDLL const char* device::failcode_to_string(rfnm_api_failcode code) {
         return "Schedule rejected: non-monotonic tick";
     case RFNM_API_SCHED_NOT_RESET:
         return "Schedule rejected: ring never reset (call schedule_reset first)";
+    case RFNM_API_RX_PIPE_DEAD:
+        return "RX pipe unrecoverably dead for this session (resync budget exhausted)";
     default:
         return "Unknown error code";
     }

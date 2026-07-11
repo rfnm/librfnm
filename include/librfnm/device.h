@@ -465,7 +465,6 @@ namespace rfnm {
         MSDLL bool convert_cs16_to_cs8(uint8_t* dest, uint8_t* src, size_t sample_cnt);
 
         MSDLL int single_ch_id_bitmap_to_adc_id(uint8_t ch_ids);
-        MSDLL void dqbuf_overwrite_cc(uint8_t adc_id, int acquire_lock);
         void dqbuf_overwrite_cc_locked(uint8_t adc_id);
         MSDLL int dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock);
         MSDLL void reorder_tx_queue_nolock(tx_buf_s &tx_s);
