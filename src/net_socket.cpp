@@ -167,6 +167,24 @@ uint64_t net::tcp_connect(const std::string& ipv4_addr, uint16_t port, bool node
     return from_native(fd);
 }
 
+bool net::sock_set_rcvtimeo(uint64_t h, uint32_t ms) {
+    // review F4-lite (2026-07-11): a peer that dies silently (board power loss)
+    // left blocking recv() waiting forever - on the CONTROL socket that hang is
+    // held under the ctrl mutex and freezes the whole control API. A receive
+    // timeout converts it into a loud failure. Control-socket use only: the DATA
+    // socket's blocking reads are by-design (a timeout there would read as a
+    // stream failure).
+#ifdef _WIN32
+    DWORD tv = ms;
+    return setsockopt(to_native(h), SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv)) == 0;
+#else
+    struct timeval tv;
+    tv.tv_sec = ms / 1000;
+    tv.tv_usec = (ms % 1000) * 1000;
+    return setsockopt(to_native(h), SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) == 0;
+#endif
+}
+
 bool net::read_exact(uint64_t h, void* buf, size_t len) {
     native_sock_t fd = to_native(h);
     uint8_t* p = (uint8_t*)buf;

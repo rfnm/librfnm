@@ -500,6 +500,10 @@ exit_local:
 
             // Connect to the TCP control port
             rfnm_ctrl_socket_tcp.h = net::tcp_connect(rfnm_eth_transport_ip_addr, RFNM_TCP_CTRL_PORT, true);
+            // review F4-lite: a silently-dead peer must fail control transfers, not
+            // hang them forever under the ctrl mutex (which froze the whole control
+            // API on board power loss). 3 s >> the worst observed ctrl RTT tail.
+            net::sock_set_rcvtimeo(rfnm_ctrl_socket_tcp.h, 3000);
             if (!net::sock_valid(rfnm_ctrl_socket_tcp.h)) {
                 spdlog::error("TCP connection failed: {}", net::last_error_str());
                 goto exit_eth;
@@ -620,6 +624,26 @@ MSDLL device::~device() {
     // Clean up buffers
     if (rx_buffers_allocated) {
         rx_flush(0);
+        // review F6 (2026-07-11): the auto-allocated pool (MIN_RX_BUFCNT bufs, ~82 MB
+        // at CS16) was returned to the queues here but never freed - leaked once per
+        // open/close. Pure-auto contract: when the device allocated the pool (user
+        // queued nothing before rx_work_start), it owns every buffer in the queues.
+        std::lock_guard<std::mutex> lk_in(rx_s.in_mutex);
+        std::lock_guard<std::mutex> lk_out(rx_s.out_mutex);
+        while (!rx_s.in.empty()) {
+            rx_buf* b = rx_s.in.front();
+            rx_s.in.pop();
+            delete[] b->buf;
+            delete b;
+        }
+        for (int a = 0; a < 4; a++) {
+            while (!rx_s.out[a].empty()) {
+                rx_buf* b = rx_s.out[a].top();
+                rx_s.out[a].pop();
+                delete[] b->buf;
+                delete b;
+            }
+        }
     }
 
     if (s->transport_status.transport == TRANSPORT_USB) {
@@ -2173,7 +2197,11 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     tx_s.qbuf_cnt++;
     tx_s.usb_cc++;
 
-    buf->usb_cc = (uint32_t)tx_s.usb_cc;
+    // review F5 (2026-07-11): the wire field is 32-bit but the window check above is
+    // 64-bit - truncating here desynced the two at cc 2^32 (QUEUE_FULL forever after
+    // ~8.3 days of full-rate TX). Keep the full value; the wire struct field carries
+    // the low 32 bits and the device side resyncs on cc as designed.
+    buf->usb_cc = tx_s.usb_cc;
 
     // positional free-run stamping (defect #20): every non-TIME_VALID packet carries
     // the exact tick of its first sample, computed from the last apply's anchor and
@@ -3026,7 +3054,16 @@ MSDLL rfnm_api_failcode device::get(enum req_type type) {
         if (control_transfer(RFNM_GET_DEV_STATUS, sizeof(struct rfnm_dev_status), (unsigned char*)&dev_status, 50) != RFNM_API_OK) {
             return RFNM_API_USB_FAIL;
         }
-        memcpy(&s->dev_status, &dev_status, sizeof(struct rfnm_dev_status));
+        // review F1 (2026-07-11): the worker poll writes s->dev_status under
+        // s_dev_status_mutex and tx_qbuf STAMPS from it under the same lock - an
+        // unlocked memcpy here can hand tx_qbuf a torn tx_t0/tx_epoch pair exactly
+        // at a self-heal re-mint (silently wrong-slot TX). Same discipline as the
+        // worker's own memcpy.
+        {
+            std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
+            memcpy(&s->dev_status, &dev_status, sizeof(struct rfnm_dev_status));
+            s->last_dev_time = std::chrono::high_resolution_clock::now();
+        }
     }
 
     return RFNM_API_OK;
