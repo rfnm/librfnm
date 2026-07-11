@@ -1621,10 +1621,30 @@ void device::threadfn(size_t thread_index) {
                 // up to the RTT). The mutex now guards only the memcpy. Rare duplicate
                 // polls (both threads inside the 1 ms window) serialize in libusb and
                 // just refresh twice - harmless.
+                // r6 sparse-burst lead: "while TX work is queued" is the wrong gate for
+                // a burst feeder (NR-UE shape) - its bursts always arrive while the
+                // queue is EMPTY, so thread 0 sits inside a blocking status RTT and the
+                // burst waits it out before submit, spending up to the RTT out of a
+                // ~1.5 ms write lead. On USB: when thread 1 runs an RX session it
+                // already keeps the 1 ms freshness, so thread 0 skips the poll
+                // outright; solo TX-only sessions drop to a 3 ms backstop cadence
+                // (pacing feedback lag ~6 packets vs the 2000-packet cc window).
+                // RFNM_STATUS_POLL_LEGACY=1 restores the r5 gate (A/B lever).
                 bool tx_work_pending = false;
                 if (thread_index == 0) {
-                    std::lock_guard<std::mutex> lg(tx_s.in_mutex);
-                    tx_work_pending = !tx_s.in.empty();
+                    {
+                        std::lock_guard<std::mutex> lg(tx_s.in_mutex);
+                        tx_work_pending = !tx_s.in.empty();
+                    }
+                    static const bool poll_legacy = getenv("RFNM_STATUS_POLL_LEGACY") != nullptr;
+                    if (!tx_work_pending && !poll_legacy && tpm.tx_active &&
+                            s->transport_status.transport == TRANSPORT_USB) {
+                        if (thread_data[1].rx_active) {
+                            tx_work_pending = true;    // thread 1 owns freshness
+                        } else if (ms_int.count() <= 3) {
+                            tx_work_pending = true;    // solo backstop cadence
+                        }
+                    }
                 }
                 if (!tx_work_pending)
                 {
@@ -2143,6 +2163,45 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     tx_s.cv.notify_one();
 
     return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::tx_feed_seek(uint64_t samples) {
+    // Advance the positional free-run feed position WITHOUT sending data: the next
+    // tx_qbuf stamps at the post-seek position and the device's gap scrub blanks
+    // the skipped ring span. For sparse/late-starting feeders (an NR UE writes its
+    // first content seconds into the session): the drain runs at line rate, so a
+    // multi-second feed gap can never be closed by feeding - only by seeking.
+    // Sample-grid granularity: must be a multiple of 256 (the ring slot quantum)
+    // so subsequent stamps stay on the packet grid.
+    if (samples % 256) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    // same lock tx_qbuf stamps under: a seek racing a concurrent qbuf must never
+    // tear feed_pos or stamp a packet astride the seek
+    std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+    tx_s.feed_pos += samples;
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::tx_feed_seek_to(uint64_t abs_samples) {
+    // Absolute variant: place the NEXT tx_qbuf at feed position abs_samples, i.e.
+    // air its first sample at tx_t0 + abs_samples*R. Forward-only - a backward seek
+    // would restamp over already-fed span (the device would drop it late anyway);
+    // callers that missed their slot skip ahead instead. Same 256-sample grid rule.
+    if (abs_samples % 256) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+    if (abs_samples < tx_s.feed_pos) {
+        return RFNM_API_SCHED_ORDER;
+    }
+    tx_s.feed_pos = abs_samples;
+    return RFNM_API_OK;
+}
+
+MSDLL uint64_t device::tx_feed_pos() {
+    std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
+    return tx_s.feed_pos;
 }
 
 MSDLL int device::single_ch_id_bitmap_to_adc_id(uint8_t ch_ids) {

@@ -398,6 +398,18 @@ namespace rfnm {
         MSDLL rfnm_api_failcode tx_work_stop();
         MSDLL rfnm_api_failcode tx_qbuf(struct tx_buf* buf, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode tx_dqbuf(struct tx_buf** buf);
+        // Advance the positional (POS_VALID) feed position by `samples` WITHOUT data:
+        // the skipped span is scrubbed device-side (r4 gap scrub), the next tx_qbuf
+        // stamps at the post-seek position. For sparse/late-starting feeders - a gap
+        // wider than the transport lead can never be closed by feeding (the drain
+        // consumes at line rate); it must be seeked over. Multiple of 256 only.
+        MSDLL rfnm_api_failcode tx_feed_seek(uint64_t samples);
+        // Absolute forward-only variant: the next tx_qbuf airs its first sample at
+        // tx_t0 + abs_samples*R. Backward = RFNM_API_SCHED_ORDER; off-grid (not a
+        // multiple of 256) = RFNM_API_NOT_SUPPORTED.
+        MSDLL rfnm_api_failcode tx_feed_seek_to(uint64_t abs_samples);
+        // Current feed position in samples (cumulative qbufs + seeks this session).
+        MSDLL uint64_t tx_feed_pos();
         MSDLL rfnm_api_failcode set_tx_channel_status(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = false);
 
         // RF path (antenna) name conversion
