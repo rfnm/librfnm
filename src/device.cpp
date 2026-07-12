@@ -1426,6 +1426,7 @@ void device::threadfn(size_t thread_index) {
 
             uint32_t tx_elems = buf->elem_cnt ? buf->elem_cnt : RFNM_USB_TX_PACKET_ELEM_CNT;
             uint32_t tx_multi = (tx_elems * 3) / LA_TX_BASE_BUFSIZE_12;
+            tx_headroom_scan(buf->buf, tx_elems);  // v4 meter (sampled), same payload every transport
             uint32_t tx_wire_len = RFNM_USB_TX_PACKET_HEAD_SIZE + tx_multi * LA_TX_BASE_BUFSIZE_12;
             if (s->transport_status.transport == TRANSPORT_LOCAL) {
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
@@ -1701,6 +1702,10 @@ void device::threadfn(size_t thread_index) {
                         std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
                         memcpy(&s->dev_status, &dev_status[0], sizeof(struct rfnm_dev_status));
                         s->last_dev_time = high_resolution_clock::now();
+                        // v4 device-time cache: phytimer_now paired with the host clock
+                        s->ptmr_at_status = s->dev_status.phytimer_now;
+                        s->host_at_status = std::chrono::steady_clock::now();
+                        s->ptmr_at_status_valid = (s->ptmr_at_status != 0);
                     }
                 }
             }
@@ -3044,6 +3049,10 @@ MSDLL rfnm_api_failcode device::get(enum req_type type) {
             std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
             memcpy(&s->dev_status, &dev_status, sizeof(struct rfnm_dev_status));
             s->last_dev_time = std::chrono::high_resolution_clock::now();
+            // v4 device-time cache: phytimer_now paired with the host clock
+            s->ptmr_at_status = s->dev_status.phytimer_now;
+            s->host_at_status = std::chrono::steady_clock::now();
+            s->ptmr_at_status_valid = (s->ptmr_at_status != 0);
         }
     }
 
@@ -3103,21 +3112,24 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
         auto tstart = high_resolution_clock::now();
 
         while (1) {
-            struct rfnm_dev_get_set_result r_res;
+            struct rfnm_dev_get_set_result_ext r_res;
 
-            if (control_transfer(RFNM_GET_SET_RESULT, sizeof(struct rfnm_dev_get_set_result), (unsigned char*)&r_res, 50) != RFNM_API_OK) {
+            if (control_transfer(RFNM_GET_SET_RESULT, sizeof(struct rfnm_dev_get_set_result_ext), (unsigned char*)&r_res, 50) != RFNM_API_OK) {
                 return RFNM_API_USB_FAIL;
             }
 
-            if (r_res.cc_rx == cc_rx && r_res.cc_tx == cc_tx) {
+            if (r_res.base.cc_rx == cc_rx && r_res.base.cc_tx == cc_tx) {
+                s->last_set_res = r_res;
                 for (int q = 0; q < MAX_TX_CHANNELS; q++) {
-                    if ((channel_flags[q] & applies_ch_tx) && r_res.tx_ecodes[q]) {
-                        return (rfnm_api_failcode)r_res.tx_ecodes[q];
+                    if ((channel_flags[q] & applies_ch_tx) && r_res.base.tx_ecodes[q]) {
+                        spdlog::error("apply rejected: {}", get_apply_error(q, true));
+                        return (rfnm_api_failcode)r_res.base.tx_ecodes[q];
                     }
                 }
                 for (int q = 0; q < MAX_RX_CHANNELS; q++) {
-                    if ((channel_flags[q] & applies_ch_rx) && r_res.rx_ecodes[q]) {
-                        return (rfnm_api_failcode)r_res.rx_ecodes[q];
+                    if ((channel_flags[q] & applies_ch_rx) && r_res.base.rx_ecodes[q]) {
+                        spdlog::error("apply rejected: {}", get_apply_error(q, false));
+                        return (rfnm_api_failcode)r_res.base.rx_ecodes[q];
                     }
                 }
                 if (applies_ch_tx) {
@@ -3206,22 +3218,28 @@ MSDLL rfnm_api_failcode device::set_samp_rate(uint64_t freq, uint32_t timeout_us
     // then return its status. Same cc correlation as apply()'s cc_tx/cc_rx + ecodes.
     auto tstart = std::chrono::high_resolution_clock::now();
     while (1) {
-        struct rfnm_dev_get_set_result r_res;
+        struct rfnm_dev_get_set_result_ext r_res;
 
-        if (control_transfer(RFNM_GET_SET_RESULT, sizeof(struct rfnm_dev_get_set_result), (unsigned char*)&r_res, 50) != RFNM_API_OK) {
+        if (control_transfer(RFNM_GET_SET_RESULT, sizeof(struct rfnm_dev_get_set_result_ext), (unsigned char*)&r_res, 50) != RFNM_API_OK) {
             return RFNM_API_USB_FAIL;
         }
 
-        if (r_res.cc_samp_rate == cc_samp_rate) {
+        if (r_res.base.cc_samp_rate == cc_samp_rate) {
+            s->last_set_res = r_res;
             // refresh the client-visible hwinfo with the device's value
             if (get(REQ_HWINFO)) {
                 return RFNM_API_USB_FAIL;
             }
-            if (r_res.samp_rate_ecode == 0) {
+            if (r_res.base.samp_rate_ecode == 0) {
                 // cache for the RX dead-pipe watchdog's trickle judgment (defect #18)
                 tx_s.samp_rate_hz = freq;
+            } else {
+                spdlog::error("set_samp_rate rejected: {} Hz outside the supported set or no synthesizable "
+                    "DCS plan (hwinfo.clock advertises [{}..{}] Hz; concurrent duplex additionally "
+                    "requires shared-DCS rate x2 in [50e6..100e6] - defect #27)",
+                    freq, (uint64_t)s->hwinfo.clock.samp_rate_min, (uint64_t)s->hwinfo.clock.samp_rate_max);
             }
-            return (rfnm_api_failcode)r_res.samp_rate_ecode;
+            return (rfnm_api_failcode)r_res.base.samp_rate_ecode;
         }
 
         auto tnow = std::chrono::high_resolution_clock::now();
@@ -3438,6 +3456,182 @@ MSDLL rfnm_api_failcode device::get_tx_pump_stats(uint32_t *tx_pace_rolls, uint3
         *tx_arm_repairs = s->dev_status.tx_arm_repairs;
     }
     return RFNM_API_OK;
+}
+
+// ---- v4 accessors ----
+
+static const char* rfnm_rej_field_name(uint8_t f) {
+    switch (f) {
+    case RFNM_REJ_FREQ: return "freq";
+    case RFNM_REJ_LPF_BW: return "rfic_lpf_bw";
+    case RFNM_REJ_POWER: return "power";
+    case RFNM_REJ_GAIN: return "gain";
+    case RFNM_REJ_DC_TRIM: return "rfic dc trim";
+    case RFNM_REJ_ENABLE: return "enable";
+    case RFNM_REJ_STREAM: return "stream";
+    case RFNM_REJ_AGC: return "agc";
+    case RFNM_REJ_BIAS_TEE: return "bias_tee";
+    case RFNM_REJ_FM_NOTCH: return "fm_notch";
+    case RFNM_REJ_PATH: return "path";
+    case RFNM_REJ_RATE: return "sample rate / stream plan";
+    case RFNM_REJ_CH_MISSING: return "channel presence";
+    case RFNM_REJ_DEVICE: return "device apply";
+    default: return "(unattributed)";
+    }
+}
+
+MSDLL std::string device::get_apply_error(uint8_t channel, bool tx) {
+    char msg[320];
+    const char* dir = tx ? "tx" : "rx";
+
+    if (channel >= 8) {
+        return "invalid channel index";
+    }
+    int32_t ecode = tx ? s->last_set_res.base.tx_ecodes[channel] : s->last_set_res.base.rx_ecodes[channel];
+    uint8_t field = tx ? s->last_set_res.tx_reject_field[channel] : s->last_set_res.rx_reject_field[channel];
+    if (!ecode) {
+        snprintf(msg, sizeof(msg), "%s%u: no error recorded on the last apply", dir, channel);
+        return msg;
+    }
+
+    switch (field) {
+    case RFNM_REJ_GAIN: {
+        auto& ch = s->rx.ch[channel];
+        snprintf(msg, sizeof(msg), "rx%u gain out of range: requested %d, allowed [%d..%d] dB",
+                channel, (int)ch.gain, (int)ch.gain_range.min, (int)ch.gain_range.max);
+        break;
+    }
+    case RFNM_REJ_POWER: {
+        auto& ch = s->tx.ch[channel];
+        snprintf(msg, sizeof(msg), "tx%u power out of range: requested %d, allowed [%d..%d]",
+                channel, (int)ch.power, (int)ch.power_range.min, (int)ch.power_range.max);
+        break;
+    }
+    case RFNM_REJ_FREQ: {
+        int64_t f  = tx ? s->tx.ch[channel].freq     : s->rx.ch[channel].freq;
+        int64_t lo = tx ? s->tx.ch[channel].freq_min : s->rx.ch[channel].freq_min;
+        int64_t hi = tx ? s->tx.ch[channel].freq_max : s->rx.ch[channel].freq_max;
+        snprintf(msg, sizeof(msg), "%s%u freq out of range: requested %.6f MHz, allowed [%.3f..%.3f] MHz",
+                dir, channel, f / 1e6, lo / 1e6, hi / 1e6);
+        break;
+    }
+    case RFNM_REJ_LPF_BW: {
+        int bw = tx ? s->tx.ch[channel].rfic_lpf_bw : s->rx.ch[channel].rfic_lpf_bw;
+        snprintf(msg, sizeof(msg), "%s%u rfic_lpf_bw invalid: requested %d MHz (must be >= 0)", dir, channel, bw);
+        break;
+    }
+    case RFNM_REJ_DC_TRIM: {
+        auto& ch = s->rx.ch[channel];
+        snprintf(msg, sizeof(msg), "rx%u rfic dc trim out of range: requested i=%d q=%d, allowed [-63..63]",
+                channel, (int)ch.rfic_dc_i, (int)ch.rfic_dc_q);
+        break;
+    }
+    case RFNM_REJ_ENABLE:
+    case RFNM_REJ_STREAM:
+    case RFNM_REJ_AGC:
+    case RFNM_REJ_BIAS_TEE:
+    case RFNM_REJ_FM_NOTCH:
+    case RFNM_REJ_PATH:
+        snprintf(msg, sizeof(msg), "%s%u %s: invalid enum value for this field", dir, channel, rfnm_rej_field_name(field));
+        break;
+    case RFNM_REJ_RATE:
+        if (ecode == RFNM_API_TIMEOUT) {
+            snprintf(msg, sizeof(msg), "%s%u stream apply timed out (device busy / reclock in progress)", dir, channel);
+        } else {
+            snprintf(msg, sizeof(msg), "%s%u stream plan rejected: the applied rate/direction combination has no "
+                    "DCS plan (concurrent duplex supports shared-DCS rate x2 in [50e6..100e6] only - defect #27; "
+                    "hwinfo.clock advertises the single-direction limits)", dir, channel);
+        }
+        break;
+    case RFNM_REJ_CH_MISSING:
+        snprintf(msg, sizeof(msg), "%s%u is not present on this device (apply mask named an absent channel)", dir, channel);
+        break;
+    case RFNM_REJ_DEVICE:
+        snprintf(msg, sizeof(msg), "%s%u device-layer apply failed: %s (not a validation error - see board dmesg)",
+                dir, channel, failcode_to_string((rfnm_api_failcode)ecode));
+        break;
+    default:
+        snprintf(msg, sizeof(msg), "%s%u rejected: %s (no field attribution)", dir, channel,
+                failcode_to_string((rfnm_api_failcode)ecode));
+        break;
+    }
+    return msg;
+}
+
+MSDLL bool device::get_device_time_approx(uint32_t *ticks) {
+    std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
+    if (!s->ptmr_at_status_valid || !ticks) {
+        return false;
+    }
+    // phytimer runs at a fixed 61.44 MHz (tick32 = MSTRCNT >> 2 at 245.76/4 - see
+    // PHYTIMER-DESIGN.md); extrapolate from the last status snapshot on the host
+    // steady clock. Accuracy class: publish age + poll cadence (ms-scale worst case).
+    auto el_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - s->host_at_status).count();
+    *ticks = s->ptmr_at_status + (uint32_t)((el_ns * 6144) / 100000);  // *61.44e6/1e9, exact in integers
+    return true;
+}
+
+MSDLL rfnm_api_failcode device::get_tx_rx_anchor_offset(int32_t *offset_ticks) {
+    std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
+    if (!s->dev_status.tx_epoch || !s->dev_status.rx_epoch) {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+    if (offset_ticks) {
+        *offset_ticks = (int32_t)(s->dev_status.tx_t0 - s->dev_status.rx_t0);
+    }
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::get_tx_last_late_cc(uint64_t *cc) {
+    if (get(REQ_DEV_STATUS)) {
+        return RFNM_API_USB_FAIL;
+    }
+    if (cc) {
+        *cc = s->dev_status.tx_last_late_usb_cc;
+    }
+    return RFNM_API_OK;
+}
+
+// sampled TX payload peak scan (1-in-16 packets): the 12-bit wire drops the low 4
+// bits, so a peak far below int16 full scale means few effective bits on air - and a
+// peak AT full scale means the producer already clipped upstream. Worker-thread-only
+// writer; readers tolerate torn telemetry.
+void device::tx_headroom_scan(const uint8_t* buf, size_t elems) {
+    if ((s->tx_headroom_ctr++ & 15) != 0) {
+        return;
+    }
+    const int16_t* d = (const int16_t*)buf;
+    int32_t peak = s->tx_peak_abs;
+    for (size_t j = 0; j < elems * 2; j++) {
+        int32_t v = d[j];
+        if (v < 0) v = -v;
+        if (v > peak) peak = v;
+    }
+    s->tx_peak_abs = peak;
+    s->tx_headroom_scanned += elems;
+    if (!s->tx_headroom_warned_sat && peak >= 32760) {
+        s->tx_headroom_warned_sat = true;
+        spdlog::warn("TX payload at int16 full scale (peak {}): the producer's scaling already "
+                "saturated BEFORE the 12-bit wire - distortion is upstream, not the radio", peak);
+    }
+    if (!s->tx_headroom_warned_low && s->tx_headroom_scanned > 2000000 && peak > 0 && peak < 4096) {
+        s->tx_headroom_warned_low = true;
+        int bits = 0;
+        for (int32_t p = peak; p; p >>= 1) bits++;
+        spdlog::warn("TX peak only {}/32767 after {} samples (~{} effective wire bits): the 12-bit "
+                "wire keeps bits [15:4] - raise digital amplitude toward full scale",
+                peak, s->tx_headroom_scanned, bits > 4 ? bits - 4 : 0);
+    }
+}
+
+MSDLL void device::get_tx_headroom(int32_t *peak_abs, uint64_t *samples_scanned) {
+    if (peak_abs) {
+        *peak_abs = s->tx_peak_abs;
+    }
+    if (samples_scanned) {
+        *samples_scanned = s->tx_headroom_scanned;
+    }
 }
 
 // ---- v3 phase 1: the absolute-time request ring ----

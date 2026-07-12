@@ -179,6 +179,38 @@ RFNM_PACKED_STRUCT(
 }
 );
 
+// v4: which channel-config field a validation rejection was about (device-side
+// mirror: la9310rfnm rfnm_status_ext.h - keep in sync). librfnm composes the human
+// message from (field, ecode) + the requested value it already holds + the
+// advertised ranges; transient device conditions are never represented here.
+enum rfnm_reject_field {
+	RFNM_REJ_NONE = 0,
+	RFNM_REJ_FREQ,
+	RFNM_REJ_LPF_BW,
+	RFNM_REJ_POWER,
+	RFNM_REJ_GAIN,
+	RFNM_REJ_DC_TRIM,
+	RFNM_REJ_ENABLE,
+	RFNM_REJ_STREAM,
+	RFNM_REJ_AGC,
+	RFNM_REJ_BIAS_TEE,
+	RFNM_REJ_FM_NOTCH,
+	RFNM_REJ_PATH,
+	RFNM_REJ_RATE,
+	RFNM_REJ_CH_MISSING,
+	RFNM_REJ_DEVICE,
+};
+
+RFNM_PACKED_STRUCT(
+	struct rfnm_dev_get_set_result_ext {
+	struct rfnm_dev_get_set_result base;
+	uint8_t tx_reject_field[8];	// enum rfnm_reject_field per channel, 0 = none
+	uint8_t rx_reject_field[8];
+	uint8_t samp_rate_reject_field;
+	uint8_t v4_reserved0;
+}
+);
+
 RFNM_PACKED_STRUCT(
 	struct rfnm_dev_set_samp_rate {
 	uint64_t freq;
@@ -322,6 +354,10 @@ RFNM_PACKED_STRUCT(
 	uint32_t tx_underrun_axiq;
 	uint32_t tx_underrun_ddr_rd;
 	uint32_t tx_slip_ticks;
+	// ---- protocol v4 (2026-07-12) ----
+	// cc of the most recent late/stale POS placement: attribute a late event to a
+	// specific burst (last-event + counters, not a per-burst ledger)
+	uint64_t tx_last_late_usb_cc;
 }
 );
 
@@ -507,7 +543,7 @@ RFNM_PACKED_STRUCT(
 #define RFNM_LOCAL_MMAP_RX_OFFSET 0x0UL
 #define RFNM_LOCAL_MMAP_TX_OFFSET 0x10000000UL
 
-#define RFNM_PROTOCOL_VERSION 3
+#define RFNM_PROTOCOL_VERSION 4
 #define RFNM_UDP_CTRL_PORT 28285
 #define RFNM_UDP_DATA_PORT 28286
 #define RFNM_TCP_CTRL_PORT 28287

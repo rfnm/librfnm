@@ -76,6 +76,20 @@ namespace rfnm {
         // get_phytimer() unwrap state for stream-less clients (see the getter's contract)
         uint64_t ptmr_ext = 0;
         bool ptmr_ext_valid = false;
+
+        // v4: last apply/samp-rate result (ecodes + reject fields) for get_apply_error()
+        struct rfnm_dev_get_set_result_ext last_set_res = {};
+        // v4: device-time extrapolation cache, stamped at every dev_status refresh
+        // (under s_dev_status_mutex like the status itself)
+        uint32_t ptmr_at_status = 0;
+        std::chrono::time_point<std::chrono::steady_clock> host_at_status;
+        bool ptmr_at_status_valid = false;
+        // v4: TX headroom meter (sampled scans; plain ints - telemetry, single writer)
+        int32_t tx_peak_abs = 0;
+        uint64_t tx_headroom_scanned = 0;
+        uint32_t tx_headroom_ctr = 0;
+        bool tx_headroom_warned_low = false;
+        bool tx_headroom_warned_sat = false;
     };
 
     struct rx_buf {
@@ -289,6 +303,25 @@ namespace rfnm {
         // consume this instead of re-deriving 384<<dcs from cached hwinfo.
         MSDLL rfnm_api_failcode get_anchor_step(uint32_t *step_ticks);
 
+        // ---- v4 accessors ----
+        // human-actionable message for the last apply()/set_samp_rate() rejection on a
+        // channel: field + the requested value + the advertised range. Empty-ish text
+        // when the channel carried no error.
+        MSDLL std::string get_apply_error(uint8_t channel, bool tx);
+        // "device time now" extrapolated from the last dev_status refresh (phytimer
+        // domain, u32 wrap; no control round trip). False until a status was fetched.
+        MSDLL bool get_device_time_approx(uint32_t *ticks);
+        // tx_t0 - rx_t0 of the current anchors (one timeline when minted together);
+        // NOT_SUPPORTED until both directions are anchored. Constant per apply today;
+        // a true device constant arrives with the phytimer-parity fw.
+        MSDLL rfnm_api_failcode get_tx_rx_anchor_offset(int32_t *offset_ticks);
+        // cc of the most recent late/stale POS placement (as of last status refresh)
+        MSDLL rfnm_api_failcode get_tx_last_late_cc(uint64_t *cc);
+        // TX headroom meter: peak |sample| seen at the wire boundary + samples scanned
+        // (sampled 1-in-16 packets). The 12-bit wire drops the low 4 bits - a peak far
+        // below full scale means few effective bits on air.
+        MSDLL void get_tx_headroom(int32_t *peak_abs, uint64_t *samples_scanned);
+
         // #19 pump-event telemetry: cumulative device-side self-heal counters (since
         // module load - snapshot at session start, diff at the incident). tx_pace_rolls
         // = mispaced-start regate requests from the kernel TX pace check; tx_arm_repairs
@@ -458,6 +491,7 @@ namespace rfnm {
         MSDLL bool unpack_12_to_cf32(uint8_t* dest, uint8_t* src, size_t sample_cnt);
         MSDLL bool unpack_12_to_cs8(uint8_t* dest, uint8_t* src, size_t sample_cnt);
         MSDLL void pack_cs16_to_12(uint8_t* dest, uint8_t* src8, int sample_cnt);
+        void tx_headroom_scan(const uint8_t* buf, size_t elems);  // v4 meter (worker thread)
 
         // local-transport cs16 payloads: format conversion without the 12-bit stage
         MSDLL bool convert_cs16_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt);
