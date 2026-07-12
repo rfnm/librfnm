@@ -24,7 +24,7 @@ namespace rfnm {
     const size_t RX_MAX_INFLIGHT_BUF_CNT_ETH = 2000;
 
     const uint32_t MAX_RX_CHANNELS = 8;
-    const uint32_t MAX_TX_CHANNELS = 1;
+    const uint32_t MAX_TX_CHANNELS = 8;
 
     enum channel {
         CH0 = (0x1 << 0),
@@ -79,7 +79,14 @@ namespace rfnm {
     };
 
     static const uint16_t tx_channel_apply_flags[MAX_TX_CHANNELS] = {
-        APPLY_CH0_TX
+        APPLY_CH0_TX,
+        APPLY_CH1_TX,
+        APPLY_CH2_TX,
+        APPLY_CH3_TX,
+        APPLY_CH4_TX,
+        APPLY_CH5_TX,
+        APPLY_CH6_TX,
+        APPLY_CH7_TX
     };
 
 
