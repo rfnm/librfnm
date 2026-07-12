@@ -167,6 +167,23 @@ uint64_t net::tcp_connect(const std::string& ipv4_addr, uint16_t port, bool node
     return from_native(fd);
 }
 
+bool net::sock_set_keepalive(uint64_t h) {
+    // review wave 3: a silently-dead peer (board power loss) on an IDLE tcp
+    // connection is otherwise only discovered at the next send/recv. Keepalive
+    // probes surface it in ~11 s: idle 5 s, then 3 probes 2 s apart.
+    int on = 1;
+    if (setsockopt(to_native(h), SOL_SOCKET, SO_KEEPALIVE, (const char*)&on, sizeof(on)) != 0) {
+        return false;
+    }
+#ifndef _WIN32
+    int idle = 5, intvl = 2, cnt = 3;
+    setsockopt(to_native(h), IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+    setsockopt(to_native(h), IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+    setsockopt(to_native(h), IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
+#endif
+    return true;
+}
+
 bool net::sock_set_rcvtimeo(uint64_t h, uint32_t ms) {
     // review F4-lite (2026-07-11): a peer that dies silently (board power loss)
     // left blocking recv() waiting forever - on the CONTROL socket that hang is

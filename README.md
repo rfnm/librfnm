@@ -10,13 +10,18 @@ It is important to note that **this driver is a work in progress.**
 
 ### Current Limitations
 
-- Very early code, **THE API DEFINITION IS NOT YET STABLE**.
-- Only works via USB.
-- Can only do recieve properly, transmit is still a work in progress (DMA issues over PCIe, nothing to do with this code).
+- **THE API DEFINITION IS NOT YET STABLE** (a versioned wire protocol gates
+  mismatched pairs loudly; librfnm and the device kernel modules deploy together).
 
-### Future Features
+### Transports
 
-- Local transport (librfnm will run in userspace inside the RFNM device).
+- **USB** (host): async URB engines on both directions.
+- **TCP/Ethernet** (host): full control + streaming, MSS-negotiated framing
+  (see the performance section below).
+- **LOCAL** (on the device): zero-copy mmap pools against the kernel packet rings.
+
+TX and RX are both fully supported: continuous streaming, phytimer-stamped RX,
+positional (POS_VALID) sample-exact TX placement, and ring-scheduled RX windows.
 
 # Installation
 

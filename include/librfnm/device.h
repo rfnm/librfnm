@@ -90,6 +90,9 @@ namespace rfnm {
         uint32_t tx_headroom_ctr = 0;
         bool tx_headroom_warned_low = false;
         bool tx_headroom_warned_sat = false;
+        // wave 3: control-channel dead latch (TCP) - fail fast instead of a fresh
+        // receive timeout per call; session-terminal, reopen recovers
+        std::atomic<bool> tcp_ctrl_dead{ false };
     };
 
     struct rx_buf {

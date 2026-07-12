@@ -28,6 +28,7 @@ namespace rfnm {
         // receive timeout in ms. Control sockets only - a timeout on the data socket
         // reads as a stream failure to the reader loop (review F4-lite 2026-07-11).
         bool sock_set_rcvtimeo(uint64_t h, uint32_t ms);
+        bool sock_set_keepalive(uint64_t h);
 
         // exact-length blocking IO: loop over partial transfers and retry EINTR. Return true only
         // once the full length moved; false on any error or peer close, matching how the call

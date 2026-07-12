@@ -84,10 +84,10 @@ MSDLL bool device::unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_
     }
     
     MSDLL bool device::unpack_12_to_cf32(uint8_t* dest, uint8_t* src, size_t sample_cnt) {
-        uint64_t buf{};
-        uint64_t r0{};
-        uint64_t* dest_64{};
-        uint64_t* src_64{};
+        [[maybe_unused]] uint64_t buf{};
+        [[maybe_unused]] uint64_t r0{};
+        [[maybe_unused]] uint64_t* dest_64{};
+        [[maybe_unused]] uint64_t* src_64{};
     
         if (sample_cnt % 2) {
         //    spdlog::error("RFNM::Conversion::unpack12to16() -> sample_cnt {} is not divisible by 2", sample_cnt);

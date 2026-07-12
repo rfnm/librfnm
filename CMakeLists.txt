@@ -22,10 +22,6 @@ endif()
 
 set(ENABLE_ADDRESS_SANITIZER OFF)
 
-if(NOT COMMAND CPMAddPackage)
-    include(cmake/cpm.cmake)
-endif()
-
 # List all source files
 file(GLOB_RECURSE SRC "src/*.cpp")
 
@@ -63,7 +59,8 @@ if (NOT MSVC)
     set_target_properties(rfnm_static PROPERTIES OUTPUT_NAME "rfnm")
 endif ()
 
-add_compile_definitions(SPDLOG_FMT_EXTERNAL=0)
+# spdlog::spdlog (system package) already carries SPDLOG_FMT_EXTERNAL in its
+# interface; defining it again here double-defined it on every TU (wave-3 hygiene)
 
 # Find spdlog
 find_package(spdlog CONFIG REQUIRED)

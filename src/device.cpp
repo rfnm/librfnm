@@ -65,7 +65,6 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
     s = new struct status();
     usb_handle = new _usb_handle;
 
-    int cnt = 0;
     int dev_cnt = 0;
     int r;
     int open_attempt = 0;
@@ -274,14 +273,14 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
 
             libusb_free_device_list(devs, 1);
 
-            for (int8_t i = 0; i < THREAD_COUNT; i++) {
+            for (size_t i = 0; i < THREAD_COUNT; i++) {
                 thread_data[i].ep_id = i + 1;
                 thread_data[i].rx_active = 0;
                 thread_data[i].tx_active = 0;
                 thread_data[i].shutdown_req = 0;
             }
 
-            for (int i = 0; i < THREAD_COUNT; i++) {
+            for (size_t i = 0; i < THREAD_COUNT; i++) {
                 thread_c[i] = std::thread(&device::threadfn, this, i);
             }
 
@@ -470,14 +469,14 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
             goto exit_close_local;
         }
 
-        for (int8_t i = 0; i < THREAD_COUNT; i++) {
+        for (size_t i = 0; i < THREAD_COUNT; i++) {
             thread_data[i].ep_id = i + 1;
             thread_data[i].rx_active = 0;
             thread_data[i].tx_active = 0;
             thread_data[i].shutdown_req = 0;
         }
 
-        for (int i = 0; i < THREAD_COUNT; i++) {
+        for (size_t i = 0; i < THREAD_COUNT; i++) {
             thread_c[i] = std::thread(&device::threadfn, this, i);
         }
 
@@ -489,7 +488,9 @@ MSDLL device::device(enum transport transport, std::string address, enum debug_l
         close(fd);
 #endif
     }
+#ifdef BUILD_RFNM_LOCAL_TRANSPORT
 exit_local:
+#endif
     if (transport == TRANSPORT_TCP || transport == TRANSPORT_FIND) {
         try {
             // Reuse discovery to resolve the device address: it probes every host interface
@@ -507,6 +508,7 @@ exit_local:
             // hang them forever under the ctrl mutex (which froze the whole control
             // API on board power loss). 3 s >> the worst observed ctrl RTT tail.
             net::sock_set_rcvtimeo(rfnm_ctrl_socket_tcp.h, 3000);
+            net::sock_set_keepalive(rfnm_ctrl_socket_tcp.h);
             if (!net::sock_valid(rfnm_ctrl_socket_tcp.h)) {
                 spdlog::error("TCP connection failed: {}", net::last_error_str());
                 goto exit_eth;
@@ -534,6 +536,7 @@ exit_local:
             // can't observe a shutdown request, which turned a device close during a stalled
             // connect into a use-after-free
             tcp_data_socket.h = net::tcp_connect(rfnm_eth_transport_ip_addr, RFNM_TCP_DATA_PORT, true);
+            net::sock_set_keepalive(tcp_data_socket.h);
             if (!net::sock_valid(tcp_data_socket.h)) {
                 spdlog::error("TCP connection failed: {}", net::last_error_str());
                 goto exit_eth;
@@ -564,14 +567,14 @@ exit_local:
 
             tcp_data_connected = true;
 
-            for (int8_t i = 0; i < THREAD_COUNT; i++) {
+            for (size_t i = 0; i < THREAD_COUNT; i++) {
                 thread_data[i].ep_id = i + 1;
                 thread_data[i].rx_active = 0;
                 thread_data[i].tx_active = 0;
                 thread_data[i].shutdown_req = 0;
             }
 
-            for (int i = 0; i < THREAD_COUNT; i++) {
+            for (size_t i = 0; i < THREAD_COUNT; i++) {
                 thread_c[i] = std::thread(&device::threadfn, this, i);
             }
 
@@ -595,7 +598,8 @@ exit_eth:
 }
 
 MSDLL device::~device() {
-    for (int8_t i = 0; i < THREAD_COUNT; i++) {
+    bool threads_detached = false;
+    for (size_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].rx_active = 0;
         thread_data[i].tx_active = 0;
@@ -610,7 +614,7 @@ MSDLL device::~device() {
         net::sock_shutdown(tcp_data_socket.h);
     }
 
-    for (int8_t i = 0; i < THREAD_COUNT; i++) {
+    for (size_t i = 0; i < THREAD_COUNT; i++) {
         if (thread_c[i].joinable()) {
             // Use async to implement timeout
             auto future = std::async(std::launch::async, [&]() {
@@ -620,8 +624,21 @@ MSDLL device::~device() {
             if (future.wait_for(std::chrono::milliseconds(500)) == std::future_status::timeout) {
                 spdlog::warn("worker thread {} timed out, detaching", i);
                 thread_c[i].detach();
+                // review wave 3: a detached worker still dereferences this object's
+                // state (s, queues, sockets). Freeing it under the worker was the
+                // destructor UAF - leak the session state deliberately and loudly
+                // instead; process teardown reclaims it.
+                threads_detached = true;
             }
         }
+    }
+
+    if (threads_detached) {
+        // a live (detached) worker still references s, the queues, and the transport
+        // handles - freeing any of it here is the UAF the 500 ms join timeout was
+        // papering over. Leak the session deliberately; process exit reclaims it.
+        spdlog::error("leaking device session state: a worker thread outlived teardown (detached) - not freeing pools/transport/state under it");
+        return;
     }
 
     // Clean up buffers
@@ -771,9 +788,17 @@ void device::threadfn(size_t thread_index) {
     uint8_t* ltxbuf_heap = new uint8_t[RFNM_LOCAL_TX_PACKET_SIZE]();
     struct rfnm_rx_usb_buf* lrxbuf = (struct rfnm_rx_usb_buf*)lrxbuf_heap;
     struct rfnm_tx_usb_buf* ltxbuf = (struct rfnm_tx_usb_buf*)ltxbuf_heap;
-    int transferred;
+    int transferred = 0;
     auto& tpm = thread_data[thread_index];
     int r;
+    // USB async URB engines (thread 1 owns arz/RX, thread 0 owns az/TX). Hoisted to
+    // function scope so the exit path can cancel-and-drain in-flight URBs before the
+    // thread returns - libusb completing a canceled transfer into freed thread state
+    // was the teardown UAF (review item, wave 3).
+    static thread_local usb_tx_async_state az = {};
+    static thread_local usb_rx_async_state arz = {};
+    bool prev_tx_active = false;
+    int status_fail_streak = 0;
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
     // zero-copy pool indices this pass holds (RX between GET and PUT, TX between ACQ and SUB)
     uint32_t local_rx_idx = 0;
@@ -813,6 +838,38 @@ void device::threadfn(size_t thread_index) {
         }
 
 
+
+        if (s->transport_status.transport == TRANSPORT_USB && prev_tx_active && !tpm.tx_active && az.initialized) {
+            // TX stream stopped: pump completions and reap finished URB app buffers now -
+            // the last <=12 otherwise sit unreturned until the NEXT session's first
+            // submit, and a drain-then-close client never got them back (review item)
+            for (int pass = 0; pass < 10; pass++) {
+                bool inflight = false;
+                struct timeval tv_reap = {0, 10000};
+                libusb_handle_events_timeout(nullptr, &tv_reap);
+                for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                    if (az.state[q] == 1) {
+                        inflight = true;
+                    }
+                }
+                if (!inflight) {
+                    break;
+                }
+            }
+            int reaped = 0;
+            for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                if (az.state[q] == 2 || az.state[q] == 3) {
+                    std::lock_guard<std::mutex> lockGuard(tx_s.out_mutex);
+                    tx_s.out.push(az.app[q]);
+                    az.state[q] = 0;
+                    reaped++;
+                }
+            }
+            if (reaped) {
+                tx_s.cv.notify_one();
+            }
+        }
+        prev_tx_active = tpm.tx_active;
 
         if (tpm.rx_active) {
             // CHANGED: For TCP, only thread 1 handles RX
@@ -868,7 +925,6 @@ void device::threadfn(size_t thread_index) {
                 // set anywhere - the second-cable ping-pong idea never shipped, and the
                 // pump keeps strict per-endpoint ordering on primary)
                 libusb_device_handle* lusb_handle = usb_handle->primary;
-                static thread_local usb_rx_async_state arz = {};
                 if (getenv("RFNM_DEBUG_STALL")) {
                     static thread_local auto last_census = std::chrono::high_resolution_clock::now();
                     auto nowc = std::chrono::high_resolution_clock::now();
@@ -1285,11 +1341,19 @@ void device::threadfn(size_t thread_index) {
                     }
                 }
                 if (!tcp_rx_ok) {
-                    std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
-                    rx_s.in.push(buf);
+                    {
+                        std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
+                        rx_s.in.push(buf);
+                    }
                     rfnm_rx_in_nap_cv.notify_all();
-
-                    //spdlog::error("TCP RX problem: {}", net::last_error_str());
+                    // read_exact on the blocking data socket only fails on EOF/hard
+                    // error (or the framing poison above, which already shut it down):
+                    // the stream is over. Say it once and latch so dqbuf callers get
+                    // RX_PIPE_DEAD instead of a silent forever-retry (review wave 3).
+                    if (!rx_pipe_dead_latch.exchange(true)) {
+                        spdlog::error("TCP data stream ended ({}) - latching RX_PIPE_DEAD, reopen the device to recover", net::last_error_str());
+                        rx_s.cv.notify_all();
+                    }
                     goto skip_rx;
                 }
             }
@@ -1480,7 +1544,6 @@ void device::threadfn(size_t thread_index) {
                 libusb_device_handle* lusb_handle = usb_handle->primary;
 
                 // async pipelined sends on ONE ordered endpoint (see engine notes above)
-                static thread_local usb_tx_async_state az = {};
                 if (!az.initialized) {
                     for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
                         az.xfer[q] = libusb_alloc_transfer(0);
@@ -1685,20 +1748,31 @@ void device::threadfn(size_t thread_index) {
                     struct rfnm_dev_status dev_status[1];
 
                     if (/*(rand() % 10 == 0) ||*/ control_transfer(RFNM_GET_DEV_STATUS, sizeof(struct rfnm_dev_status), (unsigned char*)&dev_status[0], 50) != RFNM_API_OK) {
-                        spdlog::error("control_transfer for RFNM_GET_DEV_STATUS failed");
-                        //return RFNM_API_USB_FAIL;
-
-                        if (ms_int.count() > 25 && s->transport_status.transport != TRANSPORT_TCP) {
-                            spdlog::error("stopping stream");
-
-                            for (int8_t i = 0; i < THREAD_COUNT; i++) {
+                        // review wave 3: ONE failed 50 ms poll used to kill the whole
+                        // session silently (and TCP never died at all). Budgeted now,
+                        // unified: 4 consecutive failures AND >1 s without a good status
+                        // = the board is gone - say exactly that once, latch the RX
+                        // dead-pipe verdict so blocked dqbuf callers fail with
+                        // RX_PIPE_DEAD instead of timing out forever, and stop.
+                        status_fail_streak++;
+                        if (status_fail_streak >= 4 && ms_int.count() > 1000) {
+                            spdlog::error("device status unreachable ({} consecutive failures, {} ms since last good status) - declaring the {} link dead, stopping the session (clients see RX_PIPE_DEAD)",
+                                status_fail_streak, (long)ms_int.count(),
+                                s->transport_status.transport == TRANSPORT_TCP ? "TCP" :
+                                (s->transport_status.transport == TRANSPORT_USB ? "USB" : "LOCAL"));
+                            rx_pipe_dead_latch = true;
+                            rx_s.cv.notify_all();
+                            for (size_t i = 0; i < THREAD_COUNT; i++) {
                                 thread_data[i].rx_active = 0;
                                 thread_data[i].tx_active = 0;
                                 thread_data[i].shutdown_req = 1;
                             }
+                        } else {
+                            spdlog::error("control_transfer for RFNM_GET_DEV_STATUS failed (streak {})", status_fail_streak);
                         }
                     }
                     else {
+                        status_fail_streak = 0;
                         std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
                         memcpy(&s->dev_status, &dev_status[0], sizeof(struct rfnm_dev_status));
                         s->last_dev_time = high_resolution_clock::now();
@@ -1709,6 +1783,82 @@ void device::threadfn(size_t thread_index) {
                     }
                 }
             }
+        }
+    }
+
+    if (s->transport_status.transport == TRANSPORT_USB && (az.initialized || arz.initialized)) {
+        // cancel-and-drain this thread's URB engine before returning: a URB completing
+        // (even as CANCELLED) after the thread state is gone was the hot-unplug /
+        // teardown UAF (review item). Bounded; a vanished device resolves cancels in
+        // one event pass with LIBUSB_TRANSFER_NO_DEVICE.
+        for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+            if (az.initialized && az.state[q] == 1 && az.xfer[q]) {
+                libusb_cancel_transfer(az.xfer[q]);
+            }
+        }
+        for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
+            for (int q = 0; q < RFNM_RX_ASYNC_URBS_PER_EP; q++) {
+                if (arz.initialized && arz.state[e][q] == 1 && arz.xfer[e][q]) {
+                    libusb_cancel_transfer(arz.xfer[e][q]);
+                }
+            }
+        }
+        bool inflight = true;
+        for (int pass = 0; pass < 50 && inflight; pass++) {
+            struct timeval tv_drain = {0, 10000};
+            libusb_handle_events_timeout(nullptr, &tv_drain);
+            inflight = false;
+            for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                if (az.initialized && az.state[q] == 1) {
+                    inflight = true;
+                }
+            }
+            for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
+                for (int q = 0; q < RFNM_RX_ASYNC_URBS_PER_EP; q++) {
+                    if (arz.initialized && arz.state[e][q] == 1) {
+                        inflight = true;
+                    }
+                }
+            }
+        }
+        if (az.initialized) {
+            // hand the last TX app buffers back so the client's accounting closes
+            int reaped = 0;
+            for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                if (az.state[q] == 2 || az.state[q] == 3) {
+                    std::lock_guard<std::mutex> lockGuard(tx_s.out_mutex);
+                    tx_s.out.push(az.app[q]);
+                    az.state[q] = 0;
+                    reaped++;
+                }
+            }
+            if (reaped) {
+                tx_s.cv.notify_one();
+            }
+        }
+        if (inflight) {
+            spdlog::warn("USB teardown: URBs still in flight after the drain window - leaking engine buffers deliberately (no completion into freed memory)");
+        } else {
+            for (int q = 0; q < RFNM_TX_ASYNC_URBS; q++) {
+                if (az.xfer[q]) {
+                    libusb_free_transfer(az.xfer[q]);
+                    az.xfer[q] = nullptr;
+                }
+                free(az.xbuf[q]);
+                az.xbuf[q] = nullptr;
+            }
+            for (int e = 0; e < RFNM_RX_ASYNC_EPS; e++) {
+                for (int q = 0; q < RFNM_RX_ASYNC_URBS_PER_EP; q++) {
+                    if (arz.xfer[e][q]) {
+                        libusb_free_transfer(arz.xfer[e][q]);
+                        arz.xfer[e][q] = nullptr;
+                    }
+                    free(arz.xbuf[e][q]);
+                    arz.xbuf[e][q] = nullptr;
+                }
+            }
+            az.initialized = 0;
+            arz.initialized = 0;
         }
     }
 
@@ -1885,7 +2035,9 @@ MSDLL std::vector<struct dev_info> device::find(enum transport transport, std::s
 #endif
     }
 
+#ifdef BUILD_RFNM_LOCAL_TRANSPORT
 exit_local:
+#endif
     if (transport == TRANSPORT_TCP || transport == TRANSPORT_FIND) {
         std::vector<std::string> probe_addrs;
         if (address.length()) {
@@ -2063,7 +2215,7 @@ MSDLL rfnm_api_failcode device::rx_work_start() {
     rx_pipe_dead_latch = false;
     rx_work_generation++;
 
-    for (int8_t i = 0; i < THREAD_COUNT; i++) {
+    for (size_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         if (s->transport_status.transport == TRANSPORT_TCP) {
             thread_data[i].rx_active = (i == 1) ? 1 : 0;  // Only thread 1 does RX
@@ -2086,7 +2238,7 @@ MSDLL rfnm_api_failcode device::rx_work_stop() {
     if (rx_stream_count > 0) rx_stream_count--;
 
     if (rx_stream_count == 0) {
-        for (int8_t i = 0; i < THREAD_COUNT; i++) {
+        for (size_t i = 0; i < THREAD_COUNT; i++) {
             std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
             thread_data[i].rx_active = 0;
         }
@@ -2098,7 +2250,7 @@ MSDLL rfnm_api_failcode device::rx_work_stop() {
 MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
     rfnm_api_failcode ret = RFNM_API_OK;
 
-    for (int8_t i = 0; i < THREAD_COUNT; i++) {
+    for (size_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         if (s->transport_status.transport == TRANSPORT_TCP) {
             thread_data[i].tx_active = (i == 0) ? 1 : 0;  // Only thread 0 does TX
@@ -2123,7 +2275,7 @@ MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
 MSDLL rfnm_api_failcode device::tx_work_stop() {
     rfnm_api_failcode ret = RFNM_API_OK;
 
-    for (int8_t i = 0; i < THREAD_COUNT; i++) {
+    for (size_t i = 0; i < THREAD_COUNT; i++) {
         std::lock_guard<std::mutex> lockGuard(thread_data[i].cv_mutex);
         thread_data[i].tx_active = 0;
     }
@@ -2247,7 +2399,7 @@ MSDLL uint64_t device::tx_feed_pos() {
 }
 
 MSDLL int device::single_ch_id_bitmap_to_adc_id(uint8_t ch_ids) {
-    int ch_id = 0;
+    size_t ch_id = 0;
     while (ch_id < MAX_RX_CHANNELS) {
         if ((ch_ids & 0x1) == 1) {
             return s->rx.ch[ch_id].adc_id;
@@ -2730,7 +2882,7 @@ MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
         }
     }
 
-    for (int ch_id = 0; ch_id < MAX_RX_CHANNELS; ch_id++) {
+    for (size_t ch_id = 0; ch_id < MAX_RX_CHANNELS; ch_id++) {
         if (!(ch_ids & channel_flags[ch_id])) continue;
 
         int adc_id = s->rx.ch[ch_id].adc_id;
@@ -2851,6 +3003,10 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
             r = libusb_control_transfer(ctrl_handle, uint8_t(LIBUSB_ENDPOINT_OUT) | uint8_t(LIBUSB_REQUEST_TYPE_VENDOR), RFNM_B_REQUEST,
                 type, 0, (unsigned char*)buf, size, timeout_ms);
             break;
+        default:
+            // r stays -1: an unmapped verb fails loudly below instead of returning
+            // OK with an untouched reply buffer
+            break;
         }
         if (r < 0) {
             spdlog::error("libusb_control_transfer for req type {} failed with code {}", (int)type, r);
@@ -2912,6 +3068,16 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
         // transaction granularity instead of corrupting each other's responses.
         std::lock_guard<std::mutex> ctrl_lock(rfnm_ctrl_socket_tcp_mutex);
 
+        // review wave 3: once the control channel is declared dead, every further
+        // call fails fast instead of re-eating a fresh receive timeout under the
+        // mutex. Session-terminal by contract (reopen recovers), like RX_PIPE_DEAD.
+        if (s->tcp_ctrl_dead) {
+            return RFNM_API_USB_FAIL;
+        }
+        // honor the caller's budget where it's meaningful: the flat 3 s socket
+        // default only bounds a DEAD peer; a live transaction answers in ms.
+        net::sock_set_rcvtimeo(rfnm_ctrl_socket_tcp.h, timeout_ms < 500 ? 500 : (timeout_ms > 3000 ? 3000 : timeout_ms));
+
         {
             struct rfnm_tcp_ctrl_header header;
             header.cmd = type & 0xff;
@@ -2936,7 +3102,8 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
                 memcpy(message.data() + sizeof(header), buf, size);
 
                 if (!net::write_exact(rfnm_ctrl_socket_tcp.h, message.data(), message.size())) {
-                    spdlog::error("TCP control transfer error: {}", net::last_error_str());
+                    spdlog::error("TCP control transfer error: {} - latching control channel DEAD (reopen the device to recover)", net::last_error_str());
+                    s->tcp_ctrl_dead = true;
                     return RFNM_API_USB_FAIL;
                 }
 
@@ -2954,20 +3121,23 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
                 header.size = 0;
 
                 if (!net::write_exact(rfnm_ctrl_socket_tcp.h, &header, sizeof(header))) {
-                    spdlog::error("TCP control transfer error: {}", net::last_error_str());
+                    spdlog::error("TCP control transfer error: {} - latching control channel DEAD (reopen the device to recover)", net::last_error_str());
+                    s->tcp_ctrl_dead = true;
                     return RFNM_API_USB_FAIL;
                 }
 
                 /* Read response header */
                 struct rfnm_tcp_ctrl_header resp_header;
                 if (!net::read_exact(rfnm_ctrl_socket_tcp.h, &resp_header, sizeof(resp_header))) {
-                    spdlog::error("TCP control transfer error: {}", net::last_error_str());
+                    spdlog::error("TCP control transfer error: {} - latching control channel DEAD (reopen the device to recover)", net::last_error_str());
+                    s->tcp_ctrl_dead = true;
                     return RFNM_API_USB_FAIL;
                 }
 
                 if (resp_header.cmd != (type & 0xff)) {
-                    spdlog::error("TCP control response mismatch: got {}, expected {}",
+                    spdlog::error("TCP control response mismatch: got {}, expected {} - stream desynced, latching control channel DEAD",
                         resp_header.cmd, type & 0xff);
+                    s->tcp_ctrl_dead = true;
                     return RFNM_API_USB_FAIL;
                 }
 
@@ -3000,8 +3170,6 @@ MSDLL rfnm_api_failcode device::control_transfer(enum rfnm_control_ep type, uint
 }
 
 MSDLL rfnm_api_failcode device::get(enum req_type type) {
-    int r;
-
     if (type & REQ_HWINFO) {
         struct rfnm_dev_hwinfo r_hwinfo;
         if (control_transfer(RFNM_GET_DEV_HWINFO, sizeof(struct rfnm_dev_hwinfo), (unsigned char*)&r_hwinfo, 50) != RFNM_API_OK) {
@@ -3077,7 +3245,6 @@ MSDLL void device::reset_device_state() {
 }
 
 MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, uint32_t timeout_us) {
-    int r;
     uint8_t applies_ch_tx = applies & 0xff;
     uint8_t applies_ch_rx = (applies & 0xff00) >> 8;
 
@@ -3120,13 +3287,13 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
 
             if (r_res.base.cc_rx == cc_rx && r_res.base.cc_tx == cc_tx) {
                 s->last_set_res = r_res;
-                for (int q = 0; q < MAX_TX_CHANNELS; q++) {
+                for (size_t q = 0; q < MAX_TX_CHANNELS; q++) {
                     if ((channel_flags[q] & applies_ch_tx) && r_res.base.tx_ecodes[q]) {
                         spdlog::error("apply rejected: {}", get_apply_error(q, true));
                         return (rfnm_api_failcode)r_res.base.tx_ecodes[q];
                     }
                 }
-                for (int q = 0; q < MAX_RX_CHANNELS; q++) {
+                for (size_t q = 0; q < MAX_RX_CHANNELS; q++) {
                     if ((channel_flags[q] & applies_ch_rx) && r_res.base.rx_ecodes[q]) {
                         spdlog::error("apply rejected: {}", get_apply_error(q, false));
                         return (rfnm_api_failcode)r_res.base.rx_ecodes[q];
