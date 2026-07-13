@@ -331,6 +331,22 @@ namespace rfnm {
         MSDLL rfnm_api_failcode get_tx_rx_anchor_offset(int32_t *offset_ticks);
         // cc of the most recent late/stale POS placement (as of last status refresh)
         MSDLL rfnm_api_failcode get_tx_last_late_cc(uint64_t *cc);
+
+        // ---- v5 accessors: the apply timing handle ----
+        // (docs/phytimer-unified-contract-amendments-2026-07-13.md par.2/par.3)
+        // Which timelines the last apply()/rate reconfig actually broke (bit0 rx,
+        // bit1 tx, bit2 dcs_freq reclock - re-read tick_hz/r/anchor step after that
+        // one) + the at-apply wire-epoch snapshots the settle test compares against.
+        // A frequency- or gain-only apply reports timing_break == 0: the stream word
+        // deduped, no timeline moved, timing stays trustworthy THROUGH the apply.
+        MSDLL rfnm_api_failcode get_apply_timing(uint8_t *timing_break, uint32_t *rx_epoch_at_apply, uint32_t *tx_epoch_at_apply);
+        // ONE status refresh + the advance-past test: true once every broken
+        // direction's wire epoch moved PAST its snapshot (fresh anchor live). This
+        // replaces every wait-for-epoch-change / warm-two-sessions ritual on both
+        // families (Blue: usually true at first poll; geul: flips when the ~800 ms
+        // async mint lands). Errors ride the status path's loud dead-latches - a dead
+        // board fails this call, it never wedges the poll loop.
+        MSDLL rfnm_api_failcode apply_timing_settled(bool *settled);
         // TX headroom meter: peak |sample| seen at the wire boundary + samples scanned
         // (sampled 1-in-16 packets). The 12-bit wire drops the low 4 bits - a peak far
         // below full scale means few effective bits on air.

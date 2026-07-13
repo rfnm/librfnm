@@ -207,7 +207,15 @@ RFNM_PACKED_STRUCT(
 	uint8_t tx_reject_field[8];	// enum rfnm_reject_field per channel, 0 = none
 	uint8_t rx_reject_field[8];
 	uint8_t samp_rate_reject_field;
-	uint8_t v4_reserved0;
+	// ---- protocol v5 (2026-07-13): the apply timing handle (device-side mirror:
+	// la9310rfnm rfnm_status_ext.h - keep in sync). Break bits + an AT-APPLY (pre-send)
+	// wire-epoch snapshot; settle = "every broken direction's epoch advanced PAST the
+	// snapshot" (wrap-safe s32 diff > 0). No predicted epoch, no dynamic pending state -
+	// liveness rides the status poll. A direction the apply turned OFF gets no bit:
+	// that timeline ended, there is nothing to wait on.
+	uint8_t timing_break;		// bit0 rx break, bit1 tx break, bit2 dcs_freq reclock
+	uint32_t rx_epoch_at_apply;	// wire (u32) epochs when the apply was processed,
+	uint32_t tx_epoch_at_apply;	// snapshotted BEFORE the device-side work fires
 }
 );
 
@@ -543,7 +551,7 @@ RFNM_PACKED_STRUCT(
 #define RFNM_LOCAL_MMAP_RX_OFFSET 0x0UL
 #define RFNM_LOCAL_MMAP_TX_OFFSET 0x10000000UL
 
-#define RFNM_PROTOCOL_VERSION 4
+#define RFNM_PROTOCOL_VERSION 5
 #define RFNM_UDP_CTRL_PORT 28285
 #define RFNM_UDP_DATA_PORT 28286
 #define RFNM_TCP_CTRL_PORT 28287

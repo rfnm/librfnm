@@ -3790,12 +3790,15 @@ MSDLL bool device::get_device_time_approx(uint32_t *ticks) {
     if (!s->ptmr_at_status_valid || !ticks) {
         return false;
     }
-    // phytimer runs at a fixed 61.44 MHz (tick32 = MSTRCNT >> 2 at 245.76/4 - see
-    // PHYTIMER-DESIGN.md); extrapolate from the last status snapshot on the host
-    // steady clock. Accuracy class: publish age + poll cadence (ms-scale worst case).
+    // per-clocking-config tick rate (contract C1a): dcs_clk/2, the same derivation as
+    // rx_timing.tick_hz / rx_tick_to_ns - never a hardcoded 61.44 MHz (that is a property
+    // of the 122.88 MHz-DCS family; a 200 MHz-DCS plan ticks at 100 MHz). Extrapolate
+    // from the last status snapshot on the host steady clock. Accuracy class: publish
+    // age + poll cadence (ms-scale worst case).
+    uint64_t hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
     auto el_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - s->host_at_status).count();
-    *ticks = s->ptmr_at_status + (uint32_t)((el_ns * 6144) / 100000);  // *61.44e6/1e9, exact in integers
+    *ticks = s->ptmr_at_status + (uint32_t)(((unsigned __int128)(uint64_t)el_ns * hz) / 1000000000ull);
     return true;
 }
 
@@ -3806,6 +3809,44 @@ MSDLL rfnm_api_failcode device::get_tx_rx_anchor_offset(int32_t *offset_ticks) {
     }
     if (offset_ticks) {
         *offset_ticks = (int32_t)(s->dev_status.tx_t0 - s->dev_status.rx_t0);
+    }
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::get_apply_timing(uint8_t *timing_break, uint32_t *rx_epoch_at_apply, uint32_t *tx_epoch_at_apply) {
+    // reads the stored v5 result tail (same idiom as get_apply_error: apply/set are
+    // client-serialized, last_set_res is written at the cc-matched result fetch)
+    if (timing_break) {
+        *timing_break = s->last_set_res.timing_break;
+    }
+    if (rx_epoch_at_apply) {
+        *rx_epoch_at_apply = s->last_set_res.rx_epoch_at_apply;
+    }
+    if (tx_epoch_at_apply) {
+        *tx_epoch_at_apply = s->last_set_res.tx_epoch_at_apply;
+    }
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::apply_timing_settled(bool *settled) {
+    // one status refresh per poll, OUTSIDE the status mutex (get() takes its own
+    // locks); liveness rides the status path's loud dead-latches, so a dead board
+    // errors this call instead of wedging the caller's poll loop
+    rfnm_api_failcode r = get(REQ_DEV_STATUS);
+    if (r != RFNM_API_OK) {
+        return r;
+    }
+    std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
+    uint8_t brk = s->last_set_res.timing_break;
+    bool ok = true;
+    if (brk & 0x1) {
+        ok = ok && ((int32_t)(s->dev_status.rx_epoch - s->last_set_res.rx_epoch_at_apply) > 0);
+    }
+    if (brk & 0x2) {
+        ok = ok && ((int32_t)(s->dev_status.tx_epoch - s->last_set_res.tx_epoch_at_apply) > 0);
+    }
+    if (settled) {
+        *settled = ok;
     }
     return RFNM_API_OK;
 }
