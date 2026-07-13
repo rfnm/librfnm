@@ -29,7 +29,7 @@
 #include <string.h>
 #endif
 
-#define RFNM_MHZ_TO_HZ(MHz) (MHz * 1000 * 1000ul)
+#define RFNM_MHZ_TO_HZ(MHz) ((MHz) * 1000 * 1000ul)	// parens: MHZ_TO_HZ(f0 + 10) used to expand to f0 + 10e6 Hz
 #define RFNM_HZ_TO_MHZ(Hz) (Hz / (1000ul * 1000ul))
 #define RFNM_HZ_TO_KHZ(Hz) (Hz / 1000ul)
 
