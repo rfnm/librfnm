@@ -82,6 +82,17 @@ namespace rfnm {
         // v4: device-time extrapolation cache, stamped at every dev_status refresh
         // (under s_dev_status_mutex like the status itself)
         uint32_t ptmr_at_status = 0;
+        // TX positional anchor the CURRENT feed session is pinned to - latched at
+        // tx_feed_seek_to (or first stamped packet) under in_mutex+s_dev_status_mutex,
+        // stamped from EXCLUSIVELY (never the live dev_status cache: the background
+        // poller mutates it, and a re-mint mid-feed forked seek from stamps by
+        // (t0_new - t0_old) mod 2^32 = the +880 ms wild-stamp bug). Lives in the
+        // lib-allocated status block, NOT in device/tx_buf_s: old client binaries
+        // allocate device with THEIR sizeof (ABI rule).
+        uint32_t tx_anchor_t0 = 0;
+        uint8_t tx_anchor_epoch = 0;
+        uint8_t tx_anchor_r_shift = 0;
+        bool tx_anchor_valid = false;
         std::chrono::time_point<std::chrono::steady_clock> host_at_status;
         bool ptmr_at_status_valid = false;
         // v4: TX headroom meter (sampled scans; plain ints - telemetry, single writer)
@@ -212,19 +223,6 @@ namespace rfnm {
         // tx_t0 + feed_pos*R (POS_VALID), so the device places it at its exact ring
         // slot - "feed position 0 airs at tx_t0" is a contract, not an accident.
         uint64_t feed_pos;
-        // The anchor this feed session is PINNED to, latched under in_mutex at
-        // seek time (or at the first stamped packet). Stamps use THIS pair, never
-        // the live dev_status cache: the background status poller refreshes that
-        // cache asynchronously, so a re-mint landing mid-feed used to fork the
-        // seek basis (old t0) from the stamps (new t0) - the error is
-        // (t0_new - t0_old) mod 2^32, e.g. the +880 ms wild-future session-start
-        // bug (inter-mint gap mod the 69.9 s tick wrap). With the latch a
-        // re-mint makes stamps HONESTLY stale-epoch: the device drops them
-        // loudly (tx_pos_stale) and the client re-latches via tx_feed_seek_to.
-        uint32_t anchor_t0;
-        uint8_t anchor_epoch;
-        uint8_t anchor_r_shift;
-        bool anchor_valid;
         // last successfully applied sample rate: the RX dead-pipe watchdog judges
         // "trickle-dead" (defect #18 residual) against it - 0 = unknown, watchdog
         // falls back to pure-silence semantics

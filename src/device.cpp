@@ -2349,17 +2349,17 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     // the seek basis from the stamp basis by (t0_new - t0_old) mod 2^32. A re-mint
     // now makes these stamps honestly stale-epoch (loud device drops, tx_pos_stale).
     if (!(buf->tx_flags & RFNM_TX_FLAG_TIME_VALID) &&
-            (tx_s.anchor_valid || s->dev_status.tx_epoch)) {
+            (s->tx_anchor_valid || s->dev_status.tx_epoch)) {
         uint32_t samples = buf->elem_cnt ? buf->elem_cnt : RFNM_USB_TX_PACKET_ELEM_CNT;
-        if (!tx_s.anchor_valid) {
-            tx_s.anchor_t0 = s->dev_status.tx_t0;
-            tx_s.anchor_epoch = (uint8_t)(s->dev_status.tx_epoch & 0xFF);
-            tx_s.anchor_r_shift = (uint8_t)s->dev_status.tx_r_shift;
-            tx_s.anchor_valid = true;
+        if (!s->tx_anchor_valid) {
+            s->tx_anchor_t0 = s->dev_status.tx_t0;
+            s->tx_anchor_epoch = (uint8_t)(s->dev_status.tx_epoch & 0xFF);
+            s->tx_anchor_r_shift = (uint8_t)s->dev_status.tx_r_shift;
+            s->tx_anchor_valid = true;
         }
-        buf->phytimer = tx_s.anchor_t0 +
-                (uint32_t)((tx_s.feed_pos << tx_s.anchor_r_shift) >> 1);
-        buf->tx_flags = RFNM_TX_FLAG_POS_VALID | ((uint32_t)tx_s.anchor_epoch << 8) |
+        buf->phytimer = s->tx_anchor_t0 +
+                (uint32_t)((tx_s.feed_pos << s->tx_anchor_r_shift) >> 1);
+        buf->tx_flags = RFNM_TX_FLAG_POS_VALID | ((uint32_t)s->tx_anchor_epoch << 8) |
                 (buf->tx_flags & RFNM_TX_FLAG_EOB);
         tx_s.feed_pos += samples;
     }
@@ -2407,10 +2407,10 @@ MSDLL rfnm_api_failcode device::tx_feed_seek_to(uint64_t abs_samples) {
     }
     tx_s.feed_pos = abs_samples;
     if (s->dev_status.tx_epoch) {
-        tx_s.anchor_t0 = s->dev_status.tx_t0;
-        tx_s.anchor_epoch = (uint8_t)(s->dev_status.tx_epoch & 0xFF);
-        tx_s.anchor_r_shift = (uint8_t)s->dev_status.tx_r_shift;
-        tx_s.anchor_valid = true;
+        s->tx_anchor_t0 = s->dev_status.tx_t0;
+        s->tx_anchor_epoch = (uint8_t)(s->dev_status.tx_epoch & 0xFF);
+        s->tx_anchor_r_shift = (uint8_t)s->dev_status.tx_r_shift;
+        s->tx_anchor_valid = true;
     }
     return RFNM_API_OK;
 }
@@ -3366,7 +3366,7 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
                     get(REQ_DEV_STATUS);
                     std::lock_guard<std::mutex> lg(tx_s.in_mutex);
                     tx_s.feed_pos = 0;
-                    tx_s.anchor_valid = false;
+                    s->tx_anchor_valid = false;
                 }
                 return RFNM_API_OK;
             }
