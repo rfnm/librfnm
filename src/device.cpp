@@ -2337,17 +2337,29 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     buf->usb_cc = tx_s.usb_cc;
 
     // positional free-run stamping (defect #20): every non-TIME_VALID packet carries
-    // the exact tick of its first sample, computed from the last apply's anchor and
-    // the cumulative feed position - the device places it at that ring slot, so
+    // the exact tick of its first sample, computed from THE SESSION'S LATCHED anchor
+    // and the cumulative feed position - the device places it at that ring slot, so
     // "feed position 0 airs at tx_t0" holds exactly instead of re-rolling per session
     // with the align-to-live-tail race. R = 2^tx_r_shift / 2 ticks per sample (exact;
     // packets are 256-sample multiples, so the >>1 never truncates). The TX epoch
     // rides flags[15:8]: the device drops stamps minted against a torn-down anchor.
-    if (!(buf->tx_flags & RFNM_TX_FLAG_TIME_VALID) && s->dev_status.tx_epoch) {
+    // ANCHOR PINNING (the +880 ms bug): the anchor is latched ONCE (at seek, or at
+    // the first stamped packet) and never read from the live dev_status cache here -
+    // the background poller mutates that cache, and a re-mint landing mid-feed forked
+    // the seek basis from the stamp basis by (t0_new - t0_old) mod 2^32. A re-mint
+    // now makes these stamps honestly stale-epoch (loud device drops, tx_pos_stale).
+    if (!(buf->tx_flags & RFNM_TX_FLAG_TIME_VALID) &&
+            (tx_s.anchor_valid || s->dev_status.tx_epoch)) {
         uint32_t samples = buf->elem_cnt ? buf->elem_cnt : RFNM_USB_TX_PACKET_ELEM_CNT;
-        buf->phytimer = s->dev_status.tx_t0 +
-                (uint32_t)((tx_s.feed_pos << s->dev_status.tx_r_shift) >> 1);
-        buf->tx_flags = RFNM_TX_FLAG_POS_VALID | ((s->dev_status.tx_epoch & 0xFF) << 8) |
+        if (!tx_s.anchor_valid) {
+            tx_s.anchor_t0 = s->dev_status.tx_t0;
+            tx_s.anchor_epoch = (uint8_t)(s->dev_status.tx_epoch & 0xFF);
+            tx_s.anchor_r_shift = (uint8_t)s->dev_status.tx_r_shift;
+            tx_s.anchor_valid = true;
+        }
+        buf->phytimer = tx_s.anchor_t0 +
+                (uint32_t)((tx_s.feed_pos << tx_s.anchor_r_shift) >> 1);
+        buf->tx_flags = RFNM_TX_FLAG_POS_VALID | ((uint32_t)tx_s.anchor_epoch << 8) |
                 (buf->tx_flags & RFNM_TX_FLAG_EOB);
         tx_s.feed_pos += samples;
     }
@@ -2382,14 +2394,24 @@ MSDLL rfnm_api_failcode device::tx_feed_seek_to(uint64_t abs_samples) {
     // air its first sample at tx_t0 + abs_samples*R. Forward-only - a backward seek
     // would restamp over already-fed span (the device would drop it late anyway);
     // callers that missed their slot skip ahead instead. Same 256-sample grid rule.
+    // The seek LATCHES the session anchor (see tx_buf_s::anchor_*): the caller
+    // computed abs_samples against the timing it just read, so pinning the same
+    // observation here makes seek and stamps coherent by construction.
     if (abs_samples % 256) {
         return RFNM_API_NOT_SUPPORTED;
     }
+    std::lock_guard<std::mutex> lockGuard0(s_dev_status_mutex);
     std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
     if (abs_samples < tx_s.feed_pos) {
         return RFNM_API_SCHED_ORDER;
     }
     tx_s.feed_pos = abs_samples;
+    if (s->dev_status.tx_epoch) {
+        tx_s.anchor_t0 = s->dev_status.tx_t0;
+        tx_s.anchor_epoch = (uint8_t)(s->dev_status.tx_epoch & 0xFF);
+        tx_s.anchor_r_shift = (uint8_t)s->dev_status.tx_r_shift;
+        tx_s.anchor_valid = true;
+    }
     return RFNM_API_OK;
 }
 
@@ -2566,6 +2588,30 @@ MSDLL int device::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
                 rx_s.out_mutex.unlock();
             }
             return 0;
+        }
+    }
+
+    // Local transport: the zero-copy pool is 991 packets - BELOW the 1000-packet
+    // inflight threshold above, so the consumer-lag jump can never fire here and a
+    // slow-but-alive consumer holds a permanently full FIFO: delivery goes seconds
+    // stale with every read succeeding (07-13 calib-rig receipts: 35 Msps reader vs
+    // 50 Msps producer, staleness growing without bound; kernel DISCONT seams heal
+    // nothing because they are adopted only once they surface behind ~990 older
+    // packets). Bound the HELD queue depth directly - queue_size and usb_cc_max_seen
+    // are in-process truth, no dev_status round-trip - with the same jump-and-account
+    // semantics as above (the freshness contract: lose samples under lag, counted,
+    // never silently deliver stale ones).
+    if (s->transport_status.transport == TRANSPORT_LOCAL) {
+        static const int local_bound = []() {
+            const char *e = getenv("RFNM_RX_LOCAL_MAX_QUEUE");
+            return e ? atoi(e) : 128;
+        }();
+        if (local_bound > 0 && queue_size > (size_t)local_bound && rx_s.usb_cc_max_seen[adc_id] > rx_s.usb_cc[adc_id]) {
+            uint64_t jump_to = rx_s.usb_cc_max_seen[adc_id];
+            spdlog::info("local rx queue {} > bound {}, reset cc from {} to {}",
+                queue_size, local_bound, rx_s.usb_cc[adc_id], jump_to);
+            rx_s.usb_cc_dropped[adc_id] += jump_to - rx_s.usb_cc[adc_id];
+            rx_s.usb_cc[adc_id] = jump_to;
         }
     }
 
@@ -2919,6 +2965,10 @@ MSDLL enum rfnm_rf_path device::string_to_rf_path(std::string path) {
         return RFNM_PATH_LOOPBACK;
     }
 
+    if (!path.compare("terminated") || !path.compare("term")) {
+        return RFNM_PATH_TERMINATED;
+    }
+
     if (path.find("sma") != std::string::npos) {
         path.replace(path.find("sma"), 3, "");
     }
@@ -2955,6 +3005,9 @@ MSDLL std::string device::rf_path_to_string(enum rfnm_rf_path path) {
     }
     else if (path == RFNM_PATH_LOOPBACK) {
         return "loopback";
+    }
+    else if (path == RFNM_PATH_TERMINATED) {
+        return "terminated";
     }
     else {
         return std::string(1, 'A' + (int)(path));
@@ -3300,13 +3353,20 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
                     }
                 }
                 if (applies_ch_tx) {
-                    // refresh the timing anchor for positional stamping (the fw
-                    // publishes it synchronously inside the apply - defect #13) and
-                    // restart the feed position: this apply minted a fresh tx_t0 and
-                    // rebased the ring, so feed position 0 airs at the new anchor
+                    // refresh the timing anchor for positional stamping and restart
+                    // the feed position: this apply mints a fresh tx_t0 and rebases
+                    // the ring, so feed position 0 airs at the new anchor. NOTE the
+                    // mint is NOT always synchronous with the apply result (Blue:
+                    // yes, defect #13; geul: it lands after ~800 ms of async FE
+                    // programming) - so the session anchor latch is INVALIDATED
+                    // here, not re-latched: it pins at the client's next
+                    // tx_feed_seek_to (after waiting for the epoch to CHANGE) or
+                    // at the first stamped packet. Stamping from a possibly-stale
+                    // refresh here is exactly the +880 ms wild-stamp bug.
                     get(REQ_DEV_STATUS);
                     std::lock_guard<std::mutex> lg(tx_s.in_mutex);
                     tx_s.feed_pos = 0;
+                    tx_s.anchor_valid = false;
                 }
                 return RFNM_API_OK;
             }
@@ -4017,6 +4077,22 @@ MSDLL rfnm_api_failcode device::set_rx_channel_agc(uint32_t channel, enum rfnm_a
 MSDLL rfnm_api_failcode device::set_rx_channel_fm_notch(uint32_t channel, enum rfnm_fm_notch fm_notch, bool apply) {
     if (channel < MAX_RX_CHANNELS) {
         s->rx.ch[channel].fm_notch = fm_notch;
+
+        if (apply) {
+            return device::apply(rx_channel_apply_flags[channel]);
+        }
+        else {
+            return RFNM_API_OK;
+        }
+    }
+    else {
+        return RFNM_API_NOT_SUPPORTED;
+    }
+}
+
+MSDLL rfnm_api_failcode device::set_rx_channel_fe_mode(uint32_t channel, enum rfnm_rx_fe_mode fe_mode, bool apply) {
+    if (channel < MAX_RX_CHANNELS) {
+        s->rx.ch[channel].fe_mode = fe_mode;
 
         if (apply) {
             return device::apply(rx_channel_apply_flags[channel]);

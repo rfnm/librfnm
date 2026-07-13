@@ -212,6 +212,19 @@ namespace rfnm {
         // tx_t0 + feed_pos*R (POS_VALID), so the device places it at its exact ring
         // slot - "feed position 0 airs at tx_t0" is a contract, not an accident.
         uint64_t feed_pos;
+        // The anchor this feed session is PINNED to, latched under in_mutex at
+        // seek time (or at the first stamped packet). Stamps use THIS pair, never
+        // the live dev_status cache: the background status poller refreshes that
+        // cache asynchronously, so a re-mint landing mid-feed used to fork the
+        // seek basis (old t0) from the stamps (new t0) - the error is
+        // (t0_new - t0_old) mod 2^32, e.g. the +880 ms wild-future session-start
+        // bug (inter-mint gap mod the 69.9 s tick wrap). With the latch a
+        // re-mint makes stamps HONESTLY stale-epoch: the device drops them
+        // loudly (tx_pos_stale) and the client re-latches via tx_feed_seek_to.
+        uint32_t anchor_t0;
+        uint8_t anchor_epoch;
+        uint8_t anchor_r_shift;
+        bool anchor_valid;
         // last successfully applied sample rate: the RX dead-pipe watchdog judges
         // "trickle-dead" (defect #18 residual) against it - 0 = unknown, watchdog
         // falls back to pure-silence semantics
@@ -412,6 +425,7 @@ namespace rfnm {
         // use the stream class for ADC interleaving aware DC offset removal instead
         MSDLL rfnm_api_failcode set_rx_channel_agc(uint32_t channel, enum rfnm_agc_type agc, bool apply = false);
         MSDLL rfnm_api_failcode set_rx_channel_fm_notch(uint32_t channel, enum rfnm_fm_notch fm_notch, bool apply = false);
+        MSDLL rfnm_api_failcode set_rx_channel_fe_mode(uint32_t channel, enum rfnm_rx_fe_mode fe_mode, bool apply = false);
         MSDLL rfnm_api_failcode set_rx_channel_bias_tee(uint32_t channel, enum rfnm_bias_tee bias_tee, bool apply = false);
         MSDLL rfnm_api_failcode set_rx_channel_path(uint32_t channel, enum rfnm_rf_path path, bool apply = false);
         // not exposing setter for data_type because this library only handles complex samples for now
