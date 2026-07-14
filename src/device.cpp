@@ -3851,6 +3851,21 @@ MSDLL rfnm_api_failcode device::apply_timing_settled(bool *settled) {
     return RFNM_API_OK;
 }
 
+MSDLL rfnm_api_failcode device::get_tx_ring_ptrs(uint32_t *read_ptr, uint32_t *head) {
+    rfnm_api_failcode r = get(REQ_DEV_STATUS);
+    if (r != RFNM_API_OK) {
+        return r;
+    }
+    std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
+    if (read_ptr) {
+        *read_ptr = s->dev_status.tx_ring_read_ptr;
+    }
+    if (head) {
+        *head = s->dev_status.tx_ring_head;
+    }
+    return RFNM_API_OK;
+}
+
 MSDLL rfnm_api_failcode device::get_tx_last_late_cc(uint64_t *cc) {
     if (get(REQ_DEV_STATUS)) {
         return RFNM_API_USB_FAIL;

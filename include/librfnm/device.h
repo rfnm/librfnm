@@ -347,6 +347,12 @@ namespace rfnm {
         // async mint lands). Errors ride the status path's loud dead-latches - a dead
         // board fails this call, it never wedges the poll loop.
         MSDLL rfnm_api_failcode apply_timing_settled(bool *settled);
+        // TX ring pointers from the last status refresh (one refresh inside): the
+        // fw-published read position and the kernel write head, ring slots. The
+        // xtime margin truth: a positional client's REAL margin is its stamp's slot
+        // minus read_ptr - client-side clocks and meters can lie, this cannot
+        // (it is the same number the kernel's late/wild gate judges against).
+        MSDLL rfnm_api_failcode get_tx_ring_ptrs(uint32_t *read_ptr, uint32_t *head);
         // TX headroom meter: peak |sample| seen at the wire boundary + samples scanned
         // (sampled 1-in-16 packets). The 12-bit wire drops the low 4 bits - a peak far
         // below full scale means few effective bits on air.
