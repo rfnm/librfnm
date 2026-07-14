@@ -1,5 +1,9 @@
 #include <stdio.h>
 #include <csignal>
+#include <atomic>
+#include <chrono>
+#include <queue>
+#include <thread>
 #include <librfnm/device.h>
 #include <librfnm/constants.h>
 

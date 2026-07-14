@@ -9,8 +9,6 @@ namespace rfnm {
 
     const uint8_t RFNM_B_REQUEST = 100;
 
-    const size_t MAX_THREAD_COUNT = 16;
-
     const size_t MIN_RX_BUFCNT = 1000;
     // reorder window for out-of-order arrivals across the 4 IN endpoints' pipelined
     // URBs (one async reaper; USB guarantees order per endpoint, not across them).
