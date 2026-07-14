@@ -201,6 +201,13 @@ namespace rfnm {
         uint64_t phytimer_discont[4];
         uint64_t phytimer_break[4];
 
+        // P3/D2: the live delivered<->tick splice, maintained at the ordered dequeue
+        // point. delivered_samples counts every in-order dequeue (all epochs - the
+        // consumer's delivered axis is cumulative); the end tick is valid only while
+        // the extension is (re-anchors with the chain)
+        uint64_t delivered_samples[4];
+        uint64_t delivered_end_tick[4];
+        bool delivered_map_valid[4];
         // phytimer phase 2: 32->64 bit tick extension, tracked at the same ordered
         // point (packets are monotonic per adc there). ext_high accumulates wraps
         // since the epoch anchor; ext_last is the newest raw stamp seen.
@@ -223,6 +230,10 @@ namespace rfnm {
         // tx_t0 + feed_pos*R (POS_VALID), so the device places it at its exact ring
         // slot - "feed position 0 airs at tx_t0" is a contract, not an accident.
         uint64_t feed_pos;
+        // P3/D1: the session declared positional intent (any tx_feed_seek/seek_to):
+        // from then on a write that cannot be stamped POS_VALID is REFUSED
+        // (RFNM_API_TX_NOT_ANCHORED), never silently demoted to free-run
+        bool pos_intent;
         // last successfully applied sample rate: the RX dead-pipe watchdog judges
         // "trickle-dead" (defect #18 residual) against it - 0 = unknown, watchdog
         // falls back to pure-silence semantics
@@ -275,9 +286,13 @@ namespace rfnm {
         // TDD pattern: gates + frontend flips on one M4 tick grid, sample-exact
         // stamps, one DISCONT per window boundary. period/duty in TICKS, both must
         // be multiples of the chunk (768 ADC samples; ticks per chunk from the
-        // clock plan), duty < period, period >= ~4 ms (v1 scheduler floor; a 1.25 ms
-        // dark arm is proven clean). Reachable on EVERY transport (USB ep0 / TCP /
-        // LOCAL). The pattern's PHASE is the stream anchor's: tile boundaries land at
+        // clock plan), duty < period; TDD v2 floor: BOTH spans (duty and
+        // period-duty) >= 600 us - sub-floor patterns are refused loudly in fw
+        // telemetry. Reachable on EVERY transport (USB ep0 / TCP / LOCAL).
+        // MODE WARNING (P3/D3): a pattern WITHOUT an armed schedule ring paces the
+        // TX drain to the duty and re-mints the TX epoch every window - positional
+        // TX is impossible there and the device now REFUSES positional writes in
+        // that mode (loud, counted). Port-TDD positional TX = ring + pattern. The pattern's PHASE is the stream anchor's: tile boundaries land at
         // anchor + k*period, so anchor_at() is how a pattern aligns to an external
         // timeline (e.g. NR DL slots). FE flips need RFNM_CH_RF_ON_TDD enables, RX
         // apply BEFORE TX apply (the RX half-profile parks the PA - that is the TDD
@@ -297,16 +312,13 @@ namespace rfnm {
         // congruent to it). Any tick is accepted - phase is the contract, not the
         // absolute first window.
         MSDLL rfnm_api_failcode anchor_at(uint64_t tick);
-        inline rfnm_api_failcode rx_anchor_at(uint64_t tick) { return anchor_at(tick); }
-        inline rfnm_api_failcode tx_anchor_at(uint64_t tick) { return anchor_at(tick); }
         // The feed contract, published by the kernel (never hardcode these): the TX
-        // pump's enforced feed lead in phytimer ticks (rate-aware; OAI sl_ahead sanity)
-        // and the partial-RX-packet flush deadline in us (bounds worst-case RX
-        // delivery latency). Fetches a fresh dev_status.
+        // pump's HONEST usable minimum write lead in phytimer ticks (placement guard +
+        // publish staleness allowance - budget directly from this) and the partial-RX-
+        // packet flush deadline in us (bounds worst-case RX delivery latency). Fetches
+        // a fresh dev_status. P3/D5: this absorbed get_feed_min_lead - there is ONE
+        // lead number and this is it.
         MSDLL rfnm_api_failcode get_feed_contract(uint32_t *tx_feed_lead_ticks, uint32_t *rx_flush_deadline_us);
-        // v3 bundle: the HONEST usable write-lead minimum (placement guard + publish
-        // staleness allowance) - budget from this, not the conservative advisory above.
-        MSDLL rfnm_api_failcode get_feed_min_lead(uint32_t *tx_feed_min_lead_ticks);
         // v3 bundle: POS placement outcomes, device-side cumulative (snapshot at
         // session start, diff at the incident). Nonzero late/stale/misaligned deltas
         // during your session are YOUR dropped feed - the "client counters read clean
@@ -322,13 +334,6 @@ namespace rfnm {
         // channel: field + the requested value + the advertised range. Empty-ish text
         // when the channel carried no error.
         MSDLL std::string get_apply_error(uint8_t channel, bool tx);
-        // "device time now" extrapolated from the last dev_status refresh (phytimer
-        // domain, u32 wrap; no control round trip). False until a status was fetched.
-        MSDLL bool get_device_time_approx(uint32_t *ticks);
-        // tx_t0 - rx_t0 of the current anchors (one timeline when minted together);
-        // NOT_SUPPORTED until both directions are anchored. Constant per apply today;
-        // a true device constant arrives with the phytimer-parity fw.
-        MSDLL rfnm_api_failcode get_tx_rx_anchor_offset(int32_t *offset_ticks);
         // cc of the most recent late/stale POS placement (as of last status refresh)
         MSDLL rfnm_api_failcode get_tx_last_late_cc(uint64_t *cc);
 
@@ -375,10 +380,28 @@ namespace rfnm {
         // packet IS the schedule; the device's request ring is internal.
         MSDLL rfnm_api_failcode schedule_reset();
         MSDLL rfnm_api_failcode schedule_rx(uint64_t tick, uint32_t len_samples, uint16_t tag = 0);
-        // low-level escape hatch (bench tools, future FE flips): kind 1 = RX window,
-        // 2 = TX slot window (internal payload binding), 3 = FE profile flip
-        MSDLL rfnm_api_failcode schedule_ctl(uint64_t tick, uint8_t kind, uint16_t type,
-                uint32_t len_samples, uint8_t flags = 0, uint32_t bind = 0);
+        // Scheduled TX from RING-RESIDENT payload: air len_samples starting at DAC
+        // ring slot dac_slot, gate-open at `tick` (same contract as schedule_rx:
+        // absolute, monotonic, loud rejects). THE composable shape for schedules
+        // that interleave RX windows and TX bursts in time: the request ring is
+        // push-order monotonic ACROSS kinds, and TIME_VALID data-path packets land
+        // with unbounded lag vs control-path pushes - submitting a time-interleaved
+        // schedule over both paths WILL reject EINVAL (receipted, SCHED-DUPLEX leg
+        // 07-14). Fill the payload first (free-run write = slot 0, or a positional
+        // feed), then push the whole mixed schedule through this one ordered path.
+        MSDLL rfnm_api_failcode schedule_tx_slot(uint64_t tick, uint32_t len_samples, uint32_t dac_slot);
+        // P3/D2: the live delivered-sample <-> tick splice. Returns the cumulative
+        // samples DELIVERED on this adc (in-order dequeues since open) and the
+        // extended tick just past the last delivered sample - maintained at the
+        // ordered dequeue point from the device's own stamps, so it tracks every
+        // gap and re-gate the moment it is delivered. Convert any delivered index:
+        //   tick(idx) = tick_at_delivered - rx_samples_to_ticks(delivered - idx)
+        // NEVER derive ticks by counting samples against an init-time anchor (the
+        // frozen t0 + count*R construction): under any gated delivery that map
+        // inherits every closed span forever (the r11 65%-late class). Local state,
+        // no control round trip. DQBUF_NO_DATA until a valid-epoch packet landed.
+        MSDLL rfnm_api_failcode get_rx_delivered(uint64_t *delivered_samples,
+                uint64_t *tick_at_delivered, uint32_t adc_id = 0);
         // Stamp-chain health since open: clean flagged jumps (window boundaries,
         // self-heals) vs unflagged breaks (data loss nothing accounted for - any
         // nonzero break count is a bug somewhere).
@@ -425,7 +448,6 @@ namespace rfnm {
         MSDLL uint32_t get_tx_channel_count();
         MSDLL bool is_rx_channel_available(uint32_t channel);
         MSDLL bool is_tx_channel_available(uint32_t channel);
-        MSDLL rfnm_api_failcode control_transfer(enum rfnm_control_ep type, uint32_t size, uint8_t * buf, uint32_t timeout_ms);
 
         // General setters
         MSDLL rfnm_api_failcode set_stream_format(enum stream_format format, size_t* bufsize = 0, uint8_t *bytes_per_ele = 0);
@@ -468,11 +490,10 @@ namespace rfnm {
         MSDLL rfnm_api_failcode rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids = 0, uint32_t timeout_us = 20000);
         MSDLL rfnm_api_failcode rx_flush(uint32_t timeout_us = 20000, uint8_t ch_ids = 0xFF);
         MSDLL rfnm_api_failcode set_rx_channel_status(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = false);
-        // Force off every RX channel the device reports enabled (stale channels from a
-        // killed client block stream creation; the mask names only enabled channels so
-        // device-side apply validation passes). Call after open, before configuring your
-        // own channels. Not automatic in rx_stream::start(): it would tear down channels
-        // a concurrent stream on this device object is using.
+        // DEPRECATED (P3/D6): the kernel now clears stale channel enables at the
+        // session ownership boundary (SM reset at open), so this ritual is
+        // unnecessary. Kept only until the fleet-app rebuild wave (P5) deletes the
+        // last callers; new code must not call it.
         MSDLL rfnm_api_failcode rx_disable_stale_channels(uint32_t timeout_us = 20000000);
 
         // Low level TX stream API
@@ -522,6 +543,13 @@ namespace rfnm {
         }
 
     private:
+        // internal control plumbing (get()/SM reset ride it); public until P3/D5 -
+        // an escape hatch in the public header was an invitation nothing used
+        MSDLL rfnm_api_failcode control_transfer(enum rfnm_control_ep type, uint32_t size, uint8_t * buf, uint32_t timeout_ms);
+        // ring escape hatch, internal since P3/D5 (anchor verb + schedule_rx ride it):
+        // kind 1 = RX window, 2 = TX slot window, 3 = FE flip, 4 = anchor intent
+        MSDLL rfnm_api_failcode schedule_ctl(uint64_t tick, uint8_t kind, uint16_t type,
+                uint32_t len_samples, uint8_t flags = 0, uint32_t bind = 0);
         void threadfn(size_t thread_index);
 
         MSDLL bool unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt);

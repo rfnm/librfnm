@@ -2348,6 +2348,15 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     // the background poller mutates that cache, and a re-mint landing mid-feed forked
     // the seek basis from the stamp basis by (t0_new - t0_old) mod 2^32. A re-mint
     // now makes these stamps honestly stale-epoch (loud device drops, tx_pos_stale).
+    if (!(buf->tx_flags & RFNM_TX_FLAG_TIME_VALID) && tx_s.pos_intent &&
+            !s->tx_anchor_valid && !s->dev_status.tx_epoch) {
+        // P3/D1: the session declared positional intent (it seeked) and this write
+        // cannot be stamped - refuse it. Pre-P3 it silently demoted to free-run and
+        // the burst vanished with zero counters (the r11 0/0/0 face).
+        tx_s.qbuf_cnt--;
+        tx_s.usb_cc--;
+        return RFNM_API_TX_NOT_ANCHORED;
+    }
     if (!(buf->tx_flags & RFNM_TX_FLAG_TIME_VALID) &&
             (s->tx_anchor_valid || s->dev_status.tx_epoch)) {
         uint32_t samples = buf->elem_cnt ? buf->elem_cnt : RFNM_USB_TX_PACKET_ELEM_CNT;
@@ -2372,6 +2381,7 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
 }
 
 MSDLL rfnm_api_failcode device::tx_feed_seek(uint64_t samples) {
+    tx_s.pos_intent = true;	// P3/D1: from here on, unstampable writes are refused
     // Advance the positional free-run feed position WITHOUT sending data: the next
     // tx_qbuf stamps at the post-seek position and the device's gap scrub blanks
     // the skipped ring span. For sparse/late-starting feeders (an NR UE writes its
@@ -2390,6 +2400,7 @@ MSDLL rfnm_api_failcode device::tx_feed_seek(uint64_t samples) {
 }
 
 MSDLL rfnm_api_failcode device::tx_feed_seek_to(uint64_t abs_samples) {
+    tx_s.pos_intent = true;	// P3/D1
     // Absolute variant: place the NEXT tx_qbuf at feed position abs_samples, i.e.
     // air its first sample at tx_t0 + abs_samples*R. Forward-only - a backward seek
     // would restamp over already-fed span (the device would drop it late anyway);
@@ -2844,6 +2855,14 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
     // dqbuf_is_cc_continuous, which the cv wait predicate re-evaluates - every waited
     // packet double-counted and the drop percentage read half its true value.
     rx_s.usb_cc_ok[required_adc_id]++;
+    // P3/D2: the delivered axis is cumulative across epochs and gaps - every
+    // in-order dequeue advances it (this IS the consumer's sample clock). Under
+    // out_mutex: get_rx_delivered reads the (samples, tick) pair from other threads
+    // and a torn pair would skew the map by a packet.
+    {
+        std::lock_guard<std::mutex> lockGuard(rx_s.out_mutex);
+        rx_s.delivered_samples[required_adc_id] += lb->elem_cnt;
+    }
 
     // phytimer phase 1: stamp-chain validation at the ordered pop point (packets are in
     // usb_cc order per adc here). Engages only when the packet's epoch matches the cached
@@ -2896,6 +2915,16 @@ MSDLL rfnm_api_failcode device::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
                     rx_s.ext_high[a] += 0x100000000ull;
                 }
                 rx_s.ext_last[a] = lb->phytimer;
+            }
+            // P3/D2: splice the live delivered<->tick map at this packet - the tick
+            // just past its last sample. Tracks every gap/re-gate the moment it is
+            // delivered; the init-frozen (t0 + count*R) construction cannot.
+            // out_mutex pairs this with delivered_samples for tear-free reads.
+            {
+                std::lock_guard<std::mutex> lockGuard(rx_s.out_mutex);
+                rx_s.delivered_end_tick[a] = rx_s.ext_high[a] + lb->phytimer +
+                        (((uint64_t)lb->elem_cnt << s->dev_status.rx_r_shift) >> 1);
+                rx_s.delivered_map_valid[a] = true;
             }
         }
     }
@@ -3543,6 +3572,23 @@ MSDLL uint64_t device::rx_samples_to_ticks(uint64_t samples) {
     return (samples << s->dev_status.rx_r_shift) >> 1;
 }
 
+MSDLL rfnm_api_failcode device::get_rx_delivered(uint64_t *delivered_samples,
+        uint64_t *tick_at_delivered, uint32_t adc_id) {
+    // P3/D2: local splice state only - no control round trip, callable per-write.
+    // Guarded by the out_mutex like the other ordered-point state.
+    std::lock_guard<std::mutex> lockGuard(rx_s.out_mutex);
+    if (adc_id >= 4 || !rx_s.delivered_map_valid[adc_id]) {
+        return RFNM_API_DQBUF_NO_DATA;
+    }
+    if (delivered_samples) {
+        *delivered_samples = rx_s.delivered_samples[adc_id];
+    }
+    if (tick_at_delivered) {
+        *tick_at_delivered = rx_s.delivered_end_tick[adc_id];
+    }
+    return RFNM_API_OK;
+}
+
 MSDLL void device::get_rx_timing_health(uint64_t *disconts, uint64_t *breaks) {
     uint64_t d = 0, b = 0;
     for (int a = 0; a < 4; a++) {
@@ -3632,20 +3678,13 @@ MSDLL rfnm_api_failcode device::get_feed_contract(uint32_t *tx_feed_lead_ticks, 
         return RFNM_API_USB_FAIL;
     }
     if (tx_feed_lead_ticks) {
-        *tx_feed_lead_ticks = s->dev_status.tx_feed_lead_ticks;
+        // P3/D5: ONE lead number, the honest usable minimum (the old advisory
+        // tx_feed_lead_ticks over-promised by the mode - budget from this)
+        *tx_feed_lead_ticks = s->dev_status.tx_feed_min_lead_ticks ?
+                s->dev_status.tx_feed_min_lead_ticks : s->dev_status.tx_feed_lead_ticks;
     }
     if (rx_flush_deadline_us) {
         *rx_flush_deadline_us = s->dev_status.rx_flush_deadline_us;
-    }
-    return RFNM_API_OK;
-}
-
-MSDLL rfnm_api_failcode device::get_feed_min_lead(uint32_t *tx_feed_min_lead_ticks) {
-    if (get(REQ_DEV_STATUS)) {
-        return RFNM_API_USB_FAIL;
-    }
-    if (tx_feed_min_lead_ticks) {
-        *tx_feed_min_lead_ticks = s->dev_status.tx_feed_min_lead_ticks;
     }
     return RFNM_API_OK;
 }
@@ -3793,34 +3832,6 @@ MSDLL std::string device::get_apply_error(uint8_t channel, bool tx) {
     return msg;
 }
 
-MSDLL bool device::get_device_time_approx(uint32_t *ticks) {
-    std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
-    if (!s->ptmr_at_status_valid || !ticks) {
-        return false;
-    }
-    // per-clocking-config tick rate (contract C1a): dcs_clk/2, the same derivation as
-    // rx_timing.tick_hz / rx_tick_to_ns - never a hardcoded 61.44 MHz (that is a property
-    // of the 122.88 MHz-DCS family; a 200 MHz-DCS plan ticks at 100 MHz). Extrapolate
-    // from the last status snapshot on the host steady clock. Accuracy class: publish
-    // age + poll cadence (ms-scale worst case).
-    uint64_t hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
-    auto el_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - s->host_at_status).count();
-    *ticks = s->ptmr_at_status + (uint32_t)(((unsigned __int128)(uint64_t)el_ns * hz) / 1000000000ull);
-    return true;
-}
-
-MSDLL rfnm_api_failcode device::get_tx_rx_anchor_offset(int32_t *offset_ticks) {
-    std::lock_guard<std::mutex> lockGuard(s_dev_status_mutex);
-    if (!s->dev_status.tx_epoch || !s->dev_status.rx_epoch) {
-        return RFNM_API_NOT_SUPPORTED;
-    }
-    if (offset_ticks) {
-        *offset_ticks = (int32_t)(s->dev_status.tx_t0 - s->dev_status.rx_t0);
-    }
-    return RFNM_API_OK;
-}
-
 MSDLL rfnm_api_failcode device::get_apply_timing(uint8_t *timing_break, uint32_t *rx_epoch_at_apply, uint32_t *tx_epoch_at_apply) {
     // reads the stored v5 result tail (same idiom as get_apply_error: apply/set are
     // client-serialized, last_set_res is written at the cc-matched result fetch)
@@ -3956,6 +3967,12 @@ MSDLL rfnm_api_failcode device::schedule_ctl(uint64_t tick, uint8_t kind, uint16
         rx_scheduled_session = true;
     }
     return ret;
+}
+
+MSDLL rfnm_api_failcode device::schedule_tx_slot(uint64_t tick, uint32_t len_samples, uint32_t dac_slot) {
+    // P3: the public ordered-path TX schedule (kind 2, ring-resident payload) -
+    // see the header contract; the raw ctl stays private
+    return schedule_ctl(tick, 2, 0, len_samples, 0, dac_slot);
 }
 
 MSDLL rfnm_api_failcode device::schedule_rx(uint64_t tick, uint32_t len_samples, uint16_t tag) {
@@ -4557,6 +4574,8 @@ MSDLL const char* device::failcode_to_string(rfnm_api_failcode code) {
         return "Schedule rejected: ring never reset (call schedule_reset first)";
     case RFNM_API_RX_PIPE_DEAD:
         return "RX pipe unrecoverably dead for this session (resync budget exhausted)";
+    case RFNM_API_TX_NOT_ANCHORED:
+        return "Positional write refused: no TX anchor latched or published (pre-P3 this silently became free-run)";
     default:
         return "Unknown error code";
     }

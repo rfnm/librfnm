@@ -28,6 +28,20 @@ enum rfnm_fm_notch {
 	RFNM_FM_NOTCH_OFF
 };
 
+/* RX front-end leg policy. AUTO: banked filters (GNSS/cellular SAW legs on boards that
+ * have them) engage when the whole capture fits their passband - best NF/selectivity
+ * for narrowband listening. FLAT: hold the broadband leg across the band - hop levels
+ * stay comparable for panorama consumers (RTSA/sweep), where a leg change mid-span
+ * reads as a fake noise-floor shelf. */
+enum rfnm_rx_fe_mode {
+	RFNM_RX_FE_AUTO,
+	RFNM_RX_FE_FLAT,
+	/* CALIB-FROZEN: byte-exact replica of the FE banking the factory calibration
+	 * line ran (la93xx_host_sw_calib_works_may_2025) - the per-board loop rows in
+	 * rfnm.hardware are only comparable against THIS configuration. Never retune. */
+	RFNM_RX_FE_CALIB
+};
+
 enum rfnm_rf_path {
 	RFNM_PATH_SMA_A,
 	RFNM_PATH_SMA_B,
@@ -39,7 +53,9 @@ enum rfnm_rf_path {
 	RFNM_PATH_SMA_H,
 	RFNM_PATH_EMBED_ANT,
 	RFNM_PATH_LOOPBACK,
-	RFNM_PATH_NULL
+	RFNM_PATH_NULL,        /* sentinel: terminates path_possible lists, "no selection" */
+	RFNM_PATH_TERMINATED   /* RX input parked into the FE's resistive termination (no antenna,
+	                        * no TX): the receiver-only floor for flatness/cal work */
 };
 
 enum rfnm_ch_enable {
@@ -103,7 +119,13 @@ RFNM_PACKED_STRUCT(
 	enum rfnm_ch_stream stream;
 	enum rfnm_agc_type agc;
 	enum rfnm_bias_tee bias_tee;
-	enum rfnm_fm_notch fm_notch;
+	/* the old 4-byte fm_notch enum slot, split into byte fields so the struct CANNOT
+	 * grow (sizeof and every offset unchanged; little-endian legacy writers put the
+	 * fm_notch value in byte 0 and zeros here, which reads as defaults) */
+	uint8_t fm_notch;       /* enum rfnm_fm_notch */
+	uint8_t fe_mode;        /* enum rfnm_rx_fe_mode (#39) */
+	uint8_t ch_rsvd0;       /* future per-channel flags; zero = default */
+	uint8_t ch_rsvd1;
 	enum rfnm_rf_path path;
 	enum rfnm_rf_path path_preferred;
 	enum rfnm_rf_path path_possible[10];
@@ -442,6 +464,11 @@ typedef enum {
 	// Host-generated, never on the wire. The client must reopen the device - retrying
 	// rx_dqbuf will keep returning this until the stream is torn down and restarted.
 	RFNM_API_RX_PIPE_DEAD = 18,
+	// P3/D1: a positional-intent write (the session seeked) that cannot be stamped
+	// (no TX anchor latched and none published). Pre-P3 this silently demoted to
+	// free-run and the burst vanished with no counter - the worst behavior the
+	// library ever had. Host-generated, never on the wire.
+	RFNM_API_TX_NOT_ANCHORED = 19,
 } rfnm_api_failcode;
 
 #define RFNM_RX_USB_BUF_MULTI 80
