@@ -513,6 +513,21 @@ namespace rfnm {
         MSDLL rfnm_api_failcode tx_feed_seek_to(uint64_t abs_samples);
         // Current feed position in samples (cumulative qbufs + seeks this session).
         MSDLL uint64_t tx_feed_pos();
+        // r12: the feed position airing NOW, computed lib-side from the same truths
+        // the stamps use (latched/published TX anchor + the live delivered splice).
+        // THE gated-session bootstrap: one exact call, then
+        //   tx_feed_seek_to(air_pos) at bring-up
+        // starts the axis at air-now - the catch-up-seek class (tens of seconds of
+        // dead feed to jump, hand-computed across tick domains) stops existing, and
+        // zero-primes written after it are POSITIONAL, so pos_mode latches at init
+        // instead of deadlocking against the free-run head-align. Returns the
+        // position 256-aligned (seekable as-is). Needs a TX anchor
+        // (SCHED_NO_ANCHOR before the gate mints) and RX delivery (DQBUF_NO_DATA
+        // before the first packet). Wrap note: raw-32 tick math - exact for
+        // placement always (stamps are mod-2^32 by construction); call it at
+        // session INIT (< 70 s from the anchor) if you also want the monotonic
+        // u64 bookkeeping to match wall elapsed.
+        MSDLL rfnm_api_failcode tx_feed_air_pos(uint64_t *pos);
         MSDLL rfnm_api_failcode set_tx_channel_status(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = false);
 
         // RF path (antenna) name conversion

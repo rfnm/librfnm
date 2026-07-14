@@ -2380,6 +2380,40 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     return RFNM_API_OK;
 }
 
+MSDLL rfnm_api_failcode device::tx_feed_air_pos(uint64_t *pos) {
+    // r12 bootstrap contract - see the header. One lock order with the stampers.
+    uint32_t t0;
+    uint8_t rsh;
+    {
+        std::lock_guard<std::mutex> lg0(s_dev_status_mutex);
+        if (s->tx_anchor_valid) {
+            t0 = s->tx_anchor_t0;
+            rsh = s->tx_anchor_r_shift;
+        } else if (s->dev_status.tx_epoch) {
+            t0 = s->dev_status.tx_t0;
+            rsh = (uint8_t)s->dev_status.tx_r_shift;
+        } else {
+            return RFNM_API_SCHED_NO_ANCHOR;
+        }
+    }
+    uint64_t tick = 0;
+    {
+        std::lock_guard<std::mutex> lg(rx_s.out_mutex);
+        if (!rx_s.delivered_map_valid[0]) {
+            return RFNM_API_DQBUF_NO_DATA;
+        }
+        tick = rx_s.delivered_end_tick[0];
+    }
+    // raw-32 tick distance (wrap-exact), ticks -> samples via R = 2^rsh / 2,
+    // rounded DOWN to the 256-sample seek grid
+    uint32_t dt = (uint32_t)tick - t0;
+    uint64_t p_samples = (((uint64_t)dt << 1) >> rsh) & ~255ull;
+    if (pos) {
+        *pos = p_samples;
+    }
+    return RFNM_API_OK;
+}
+
 MSDLL rfnm_api_failcode device::tx_feed_seek(uint64_t samples) {
     tx_s.pos_intent = true;	// P3/D1: from here on, unstampable writes are refused
     // Advance the positional free-run feed position WITHOUT sending data: the next
