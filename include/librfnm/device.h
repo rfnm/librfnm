@@ -108,7 +108,8 @@ namespace rfnm {
 
     struct rx_buf {
         uint8_t* buf;
-        // exact tick of this buffer's first sample (61.44 MHz phy timer, u32 wrapping;
+        // exact tick of this buffer's first sample (phy timer, u32 wrapping; tick rate
+        // = dcs_clk/2 from hwinfo - plan-dependent, NEVER a constant;
         // ticks per sample R = 2^dev_status.rx_r_shift / 2, valid within rx_flags' epoch)
         uint32_t phytimer;
         uint32_t rx_flags;  // RFNM_RX_FLAG_DISCONT + epoch[15:8]; was the dead adc_cc passthrough
@@ -137,7 +138,7 @@ namespace rfnm {
     // exact - there is no tolerance anywhere in this surface.
     struct rx_timing {
         uint64_t t0;        // extended tick of the current epoch's first sample
-        uint64_t tick_hz;   // phy timer rate for this clock plan (61.44 MHz canonical)
+        uint64_t tick_hz;   // phy timer rate for this clock plan = dcs_clk/2 (plan-dependent; 0 = plan unknown)
         uint32_t r_num;     // ticks per output sample = r_num / r_den
         uint32_t r_den;
         uint8_t epoch;      // stream generation; stamps only compare within one
@@ -287,8 +288,9 @@ namespace rfnm {
         // stamps, one DISCONT per window boundary. period/duty in TICKS, both must
         // be multiples of the chunk (768 ADC samples; ticks per chunk from the
         // clock plan), duty < period; TDD v2 floor: BOTH spans (duty and
-        // period-duty) >= 600 us - sub-floor patterns are refused loudly in fw
-        // telemetry. Reachable on EVERY transport (USB ep0 / TCP / LOCAL).
+        // period-duty) >= 600 us - sub-floor patterns are refused here
+        // (synchronously, in this plan's tick rate) and in fw telemetry.
+        // Reachable on EVERY transport (USB ep0 / TCP / LOCAL).
         // MODE WARNING (P3/D3): a pattern WITHOUT an armed schedule ring paces the
         // TX drain to the duty and re-mints the TX epoch every window - positional
         // TX is impossible there and the device now REFUSES positional writes in
@@ -513,23 +515,6 @@ namespace rfnm {
         MSDLL rfnm_api_failcode tx_feed_seek_to(uint64_t abs_samples);
         // Current feed position in samples (cumulative qbufs + seeks this session).
         MSDLL uint64_t tx_feed_pos();
-        // r12, twice-corrected by owner review: the EARLIEST feed position at
-        // which a write can still safely place. ONE clock: the feed axis is the
-        // phytimer axis (shifted by tx t0, scaled by R), so this is
-        // get_phytimer() folded raw-32 against the latched t0, plus the
-        // kernel-published min write lead and a small transit allowance,
-        // 256-aligned. What it saves a caller from is exactly two receipted
-        // traps: the raw-32 fold against a t0 that the timing structs present as
-        // "extended" (it is zero-extended raw), and sourcing "now" from the
-        // delivered splice (the same clock seen ~10 ms late through the RX
-        // pipeline - the first cut of this getter made that mistake and needed a
-        // folklore margin to hide it). Gated-session bootstrap:
-        // tx_feed_seek_to(pos) once at bring-up, write your latch packets, done.
-        // extra_lead_samples places further ahead. Needs a TX anchor
-        // (SCHED_NO_ANCHOR). SUNSET RULE (anti-bloat gate): today this replaces
-        // ONE consumer's hand-build; if the second consumer (Brenta OAI, P5) does
-        // not adopt it, it gets deleted and inlined back.
-        MSDLL rfnm_api_failcode tx_feed_safe_pos(uint64_t *pos, uint64_t extra_lead_samples = 0);
         MSDLL rfnm_api_failcode set_tx_channel_status(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = false);
 
         // RF path (antenna) name conversion

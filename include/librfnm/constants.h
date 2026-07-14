@@ -12,11 +12,11 @@ namespace rfnm {
     const size_t MAX_THREAD_COUNT = 16;
 
     const size_t MIN_RX_BUFCNT = 1000;
-    // reorder window for the 16 reader threads' out-of-order completions. Variable-size
-    // packets at deep decimation rates arrive at ~2000/s (small partials), so 150 was only
-    // ~83 ms of buffering - a single thread descheduled under load made the queue overflow
-    // its recovery threshold and cycle through force-advance/discard storms. 600 gives a
-    // late packet ~300 ms to arrive before any recovery fires.
+    // reorder window for out-of-order arrivals across the 4 IN endpoints' pipelined
+    // URBs (one async reaper; USB guarantees order per endpoint, not across them).
+    // Variable-size packets at deep decimation rates arrive at ~2000/s (small
+    // partials), so 150 was only ~83 ms of buffering; 600 gives a late packet
+    // ~300 ms to arrive before any recovery fires.
     const size_t RX_RECOMB_BUF_LEN = 600;
 
 

@@ -38,6 +38,14 @@ namespace rfnm {
     static std::vector<std::string> get_broadcast_addresses();
 }
 
+// The phy timer tick rate is a DEVICE PROPERTY: dcs_clk/2, plan-dependent (61.44 MHz
+// on the 122.88 plan, 100 MHz on the 50M/DCS-200 plan), published in hwinfo. 0 means
+// the clock plan is not known yet; callers treat that as "no timebase" and fail or
+// fall back HONESTLY - never substitute a constant.
+static uint64_t rfnm_tick_hz(const struct rfnm_dev_hwinfo *hw) {
+    return hw->clock.dcs_clk / 2;
+}
+
 struct rfnm::_usb_handle {
     libusb_device_handle* primary{};
     libusb_device_handle* boost{};
@@ -2380,49 +2388,6 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode device::tx_feed_safe_pos(uint64_t *pos, uint64_t extra_lead_samples) {
-    // r12 bootstrap contract - see the header. One lock order with the stampers.
-    uint32_t t0;
-    uint8_t rsh;
-    {
-        std::lock_guard<std::mutex> lg0(s_dev_status_mutex);
-        if (s->tx_anchor_valid) {
-            t0 = s->tx_anchor_t0;
-            rsh = s->tx_anchor_r_shift;
-        } else if (s->dev_status.tx_epoch) {
-            t0 = s->dev_status.tx_t0;
-            rsh = (uint8_t)s->dev_status.tx_r_shift;
-        } else {
-            return RFNM_API_SCHED_NO_ANCHOR;
-        }
-    }
-    // owner review, round 2: ONE clock. The feed axis IS the phytimer axis
-    // (shifted by t0, scaled by R), so "now" comes from get_phytimer - a true
-    // board capture - NOT from the delivered splice, which is the same clock seen
-    // through the RX pipeline ~10 ms late. The first cut of this getter used the
-    // splice and needed a 20 ms folklore margin to cover its own source choice;
-    // with the true clock the margin is principled: the kernel-published min
-    // write lead plus a small control-transit allowance.
-    uint64_t now_ext = 0;
-    if (get_phytimer(&now_ext)) {
-        return RFNM_API_USB_FAIL;
-    }
-    uint32_t dt = (uint32_t)now_ext - t0;	// raw-32, wrap-exact
-    uint64_t margin_ticks = 2ull * 61440ull;	// transit + scheduling allowance
-    {
-        uint32_t lead = 0, flush = 0;
-        if (!get_feed_contract(&lead, &flush) && lead > margin_ticks) {
-            margin_ticks = lead;
-        }
-    }
-    uint64_t p_samples = ((((uint64_t)dt + margin_ticks) << 1) >> rsh) & ~255ull;
-    p_samples += extra_lead_samples & ~255ull;
-    if (pos) {
-        *pos = p_samples;
-    }
-    return RFNM_API_OK;
-}
-
 MSDLL rfnm_api_failcode device::tx_feed_seek(uint64_t samples) {
     tx_s.pos_intent = true;	// P3/D1: from here on, unstampable writes are refused
     // Advance the positional free-run feed position WITHOUT sending data: the next
@@ -3580,8 +3545,7 @@ MSDLL rfnm_api_failcode device::get_rx_timing(struct rx_timing *t) {
     get(REQ_DEV_STATUS);
     uint32_t r_shift = s->dev_status.rx_r_shift;
 
-    // tick rate = DCS/2; dcs_clk is populated once a stream has programmed the chain
-    t->tick_hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
+    t->tick_hz = rfnm_tick_hz(&s->hwinfo);
     t->r_num = 1u << r_shift;
     t->r_den = 2;
     t->epoch = (uint8_t)(s->dev_status.rx_epoch & 0xFF);
@@ -3602,12 +3566,18 @@ MSDLL uint64_t device::rx_tick_extend(uint32_t stamp, uint32_t adc_id) {
 }
 
 MSDLL uint64_t device::rx_tick_to_ns(uint64_t ticks) {
-    uint64_t hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
+    uint64_t hz = rfnm_tick_hz(&s->hwinfo);
+    if (!hz) {
+        return 0;	// clock plan unknown - an honest zero, never a constant guess
+    }
     return (uint64_t)(((unsigned __int128)ticks * 1000000000ull + hz / 2) / hz);
 }
 
 MSDLL uint64_t device::rx_ns_to_tick(uint64_t ns) {
-    uint64_t hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
+    uint64_t hz = rfnm_tick_hz(&s->hwinfo);
+    if (!hz) {
+        return 0;	// clock plan unknown
+    }
     return (uint64_t)(((unsigned __int128)ns * hz + 500000000ull) / 1000000000ull);
 }
 
@@ -3645,7 +3615,7 @@ MSDLL void device::get_rx_timing_health(uint64_t *disconts, uint64_t *breaks) {
 MSDLL rfnm_api_failcode device::get_tx_timing(struct tx_timing *t) {
     get(REQ_DEV_STATUS);	// same anchor-freshness contract as get_rx_timing (defect #13)
     t->t0 = s->dev_status.tx_t0;
-    t->tick_hz = s->hwinfo.clock.dcs_clk ? (s->hwinfo.clock.dcs_clk / 2) : 61440000ull;
+    t->tick_hz = rfnm_tick_hz(&s->hwinfo);
     t->r_num = 1u << s->dev_status.tx_r_shift;
     t->r_den = 2;
     t->epoch = (uint8_t)(s->dev_status.tx_epoch & 0xFF);
@@ -4039,11 +4009,20 @@ MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t
     }
     chunk_ticks = 384ull << s->hwinfo.clock.rx_dcs_div;
 
-    if (!period_ticks || !duty_ticks ||
+    // TDD v2 fw floor: BOTH spans (duty and period-duty) >= 600 us, enforced here in
+    // THIS plan's tick rate so the refusal is synchronous (USB/TCP SET_TDD is
+    // fire-and-forget; the fw refuses sub-floor patterns in telemetry only). The old
+    // period floor was the retired v1 M4 rearm limit hardcoded as 245760 ticks -
+    // which is 4 ms only when the tick runs at 61.44 MHz, and it over-blocked legal
+    // v2 patterns besides.
+    uint64_t tick_hz = rfnm_tick_hz(&s->hwinfo);
+    uint64_t span_floor_ticks = (tick_hz * 600ull) / 1000000ull;
+    if (!tick_hz || !period_ticks || !duty_ticks ||
             period_ticks % chunk_ticks || duty_ticks % chunk_ticks ||
             duty_ticks >= period_ticks ||
             period_ticks / chunk_ticks > 0xFFFF ||
-            period_ticks < 245760ull /* ~4 ms: the v1 M4 rearm floor */) {
+            duty_ticks < span_floor_ticks ||
+            (period_ticks - duty_ticks) < span_floor_ticks) {
         return RFNM_API_NOT_SUPPORTED;
     }
 
