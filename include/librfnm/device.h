@@ -513,21 +513,23 @@ namespace rfnm {
         MSDLL rfnm_api_failcode tx_feed_seek_to(uint64_t abs_samples);
         // Current feed position in samples (cumulative qbufs + seeks this session).
         MSDLL uint64_t tx_feed_pos();
-        // r12: the feed position airing NOW, computed lib-side from the same truths
-        // the stamps use (latched/published TX anchor + the live delivered splice).
-        // THE gated-session bootstrap: one exact call, then
-        //   tx_feed_seek_to(air_pos) at bring-up
-        // starts the axis at air-now - the catch-up-seek class (tens of seconds of
-        // dead feed to jump, hand-computed across tick domains) stops existing, and
-        // zero-primes written after it are POSITIONAL, so pos_mode latches at init
-        // instead of deadlocking against the free-run head-align. Returns the
-        // position 256-aligned (seekable as-is). Needs a TX anchor
-        // (SCHED_NO_ANCHOR before the gate mints) and RX delivery (DQBUF_NO_DATA
-        // before the first packet). Wrap note: raw-32 tick math - exact for
-        // placement always (stamps are mod-2^32 by construction); call it at
-        // session INIT (< 70 s from the anchor) if you also want the monotonic
-        // u64 bookkeeping to match wall elapsed.
-        MSDLL rfnm_api_failcode tx_feed_air_pos(uint64_t *pos);
+        // r12, twice-corrected by owner review: the EARLIEST feed position at
+        // which a write can still safely place. ONE clock: the feed axis is the
+        // phytimer axis (shifted by tx t0, scaled by R), so this is
+        // get_phytimer() folded raw-32 against the latched t0, plus the
+        // kernel-published min write lead and a small transit allowance,
+        // 256-aligned. What it saves a caller from is exactly two receipted
+        // traps: the raw-32 fold against a t0 that the timing structs present as
+        // "extended" (it is zero-extended raw), and sourcing "now" from the
+        // delivered splice (the same clock seen ~10 ms late through the RX
+        // pipeline - the first cut of this getter made that mistake and needed a
+        // folklore margin to hide it). Gated-session bootstrap:
+        // tx_feed_seek_to(pos) once at bring-up, write your latch packets, done.
+        // extra_lead_samples places further ahead. Needs a TX anchor
+        // (SCHED_NO_ANCHOR). SUNSET RULE (anti-bloat gate): today this replaces
+        // ONE consumer's hand-build; if the second consumer (Brenta OAI, P5) does
+        // not adopt it, it gets deleted and inlined back.
+        MSDLL rfnm_api_failcode tx_feed_safe_pos(uint64_t *pos, uint64_t extra_lead_samples = 0);
         MSDLL rfnm_api_failcode set_tx_channel_status(uint32_t channel, enum rfnm_ch_enable enable, enum rfnm_ch_stream stream, bool apply = false);
 
         // RF path (antenna) name conversion

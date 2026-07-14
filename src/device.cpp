@@ -2380,7 +2380,7 @@ MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode device::tx_feed_air_pos(uint64_t *pos) {
+MSDLL rfnm_api_failcode device::tx_feed_safe_pos(uint64_t *pos, uint64_t extra_lead_samples) {
     // r12 bootstrap contract - see the header. One lock order with the stampers.
     uint32_t t0;
     uint8_t rsh;
@@ -2396,18 +2396,27 @@ MSDLL rfnm_api_failcode device::tx_feed_air_pos(uint64_t *pos) {
             return RFNM_API_SCHED_NO_ANCHOR;
         }
     }
-    uint64_t tick = 0;
-    {
-        std::lock_guard<std::mutex> lg(rx_s.out_mutex);
-        if (!rx_s.delivered_map_valid[0]) {
-            return RFNM_API_DQBUF_NO_DATA;
-        }
-        tick = rx_s.delivered_end_tick[0];
+    // owner review, round 2: ONE clock. The feed axis IS the phytimer axis
+    // (shifted by t0, scaled by R), so "now" comes from get_phytimer - a true
+    // board capture - NOT from the delivered splice, which is the same clock seen
+    // through the RX pipeline ~10 ms late. The first cut of this getter used the
+    // splice and needed a 20 ms folklore margin to cover its own source choice;
+    // with the true clock the margin is principled: the kernel-published min
+    // write lead plus a small control-transit allowance.
+    uint64_t now_ext = 0;
+    if (get_phytimer(&now_ext)) {
+        return RFNM_API_USB_FAIL;
     }
-    // raw-32 tick distance (wrap-exact), ticks -> samples via R = 2^rsh / 2,
-    // rounded DOWN to the 256-sample seek grid
-    uint32_t dt = (uint32_t)tick - t0;
-    uint64_t p_samples = (((uint64_t)dt << 1) >> rsh) & ~255ull;
+    uint32_t dt = (uint32_t)now_ext - t0;	// raw-32, wrap-exact
+    uint64_t margin_ticks = 2ull * 61440ull;	// transit + scheduling allowance
+    {
+        uint32_t lead = 0, flush = 0;
+        if (!get_feed_contract(&lead, &flush) && lead > margin_ticks) {
+            margin_ticks = lead;
+        }
+    }
+    uint64_t p_samples = ((((uint64_t)dt + margin_ticks) << 1) >> rsh) & ~255ull;
+    p_samples += extra_lead_samples & ~255ull;
     if (pos) {
         *pos = p_samples;
     }
