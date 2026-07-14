@@ -11,31 +11,31 @@ namespace rfnm {
     // short-flush, seek policies and the gated-session bootstrap - the machinery every
     // TX consumer used to hand-roll (OAI shim, vsgd, bench tools), owned once.
     //
-    // The feeder speaks the FEED AXIS only (cumulative samples since the session's TX
+    // The stream speaks the FEED AXIS only (cumulative samples since the session's TX
     // anchor; position p airs at tx_t0 + p*R). Mapping a consumer time axis (OAI ts,
     // wall clock) onto the feed axis stays with the consumer. The device's feed
-    // position is the ONLY truth - the feeder keeps no shadow counter, so an apply()
+    // position is the ONLY truth - the stream keeps no shadow counter, so an apply()
     // that rebases the axis is detected loudly instead of silently mis-stamping.
     //
     // Duplex USB note: on a duplex session the consumer must keep its RX stream
-    // drained while feeder calls block (an unconsumed RX backlog re-gates the stream
+    // drained while tx_stream calls block (an unconsumed RX backlog re-gates the stream
     // and re-mints the TX epoch device-side). Production consumers do this by
     // construction (their RX path runs concurrently); single-threaded probes drain
     // around the blocking calls.
-    class tx_feeder {
+    class tx_stream {
     public:
-        // dev must outlive the feeder. pool_packets bounds the in-flight pipeline
+        // dev must outlive the stream. pool_packets bounds the in-flight pipeline
         // (64 full packets ~= 21 ms at 61.44 Msps - deeper than any receipted lead).
-        MSDLL explicit tx_feeder(device &dev, size_t pool_packets = 64,
+        MSDLL explicit tx_stream(device &dev, size_t pool_packets = 64,
                 enum tx_latency_policy policy = TX_LATENCY_POLICY_RELAXED);
-        MSDLL ~tx_feeder();
+        MSDLL ~tx_stream();
 
-        tx_feeder(const tx_feeder&) = delete;
-        tx_feeder& operator=(const tx_feeder&) = delete;
+        tx_stream(const tx_stream&) = delete;
+        tx_stream& operator=(const tx_stream&) = delete;
 
         // ---- session start (one per TX timeline; restart after an apply() whose
         // v5 timing handle reported a TX break) ----
-        // Continuous feeder (the gNB shape): no positional intent declared, writes
+        // Continuous free-run (the gNB shape): no positional intent declared, writes
         // flow from the current feed position.
         MSDLL rfnm_api_failcode start_free_run();
         // Positional at an absolute feed position (256-sample grid): declares intent

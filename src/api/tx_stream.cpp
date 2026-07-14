@@ -11,7 +11,7 @@
 
 #include <spdlog/spdlog.h>
 
-#include <librfnm/tx_feeder.h>
+#include <librfnm/tx_stream.h>
 
 #include "../core/impl.h"       // RFNM_TX_ASYNC_URBS: the transport's structural buffer hold
 #include "../core/timebase.h"
@@ -25,11 +25,11 @@ namespace {
     const int PRIME_PACKETS = 10;   // virgin-pump prime (kernel ingest gate opens > 8 consumed)
 }
 
-struct tx_feeder::impl {
+struct tx_stream::impl {
     device &dev;
     enum tx_latency_policy policy;
 
-    // buffer pool (feeder-owned; in-flight bufs come back through tx_dqbuf)
+    // buffer pool (stream-owned; in-flight bufs come back through tx_dqbuf)
     std::vector<struct tx_buf*> pool;
     std::vector<struct tx_buf*> free_q;
     size_t pool_total = 0;
@@ -53,7 +53,7 @@ struct tx_feeder::impl {
     std::chrono::steady_clock::time_point pace_clock_host;
     bool pace_clock_valid = false;
 
-    tx_feeder::stats st = {};
+    tx_stream::stats st = {};
 
     explicit impl(device &d, size_t pool_packets, enum tx_latency_policy pol) : dev(d), policy(pol) {
         pool_total = pool_packets ? pool_packets : 1;
@@ -108,7 +108,7 @@ struct tx_feeder::impl {
         }
         if (r != RFNM_API_OK) {
             st.drops++;
-            spdlog::error("tx_feeder: qbuf stuck (code {}), packet dropped", (int)r);
+            spdlog::error("tx_stream: qbuf stuck (code {}), packet dropped", (int)r);
             free_q.push_back(b);
             return r;
         }
@@ -161,7 +161,7 @@ struct tx_feeder::impl {
         if (dev.tx_feed_pos() < expected_dev_pos) {
             broken = true;
             st.rebases++;
-            spdlog::error("tx_feeder: feed axis rebased under the session (apply broke the TX timeline) - restart the feeder");
+            spdlog::error("tx_stream: feed axis rebased under the session (apply broke the TX timeline) - restart the stream");
             return false;
         }
         return true;
@@ -269,11 +269,11 @@ struct tx_feeder::impl {
     }
 };
 
-MSDLL tx_feeder::tx_feeder(device &dev, size_t pool_packets, enum tx_latency_policy policy) {
+MSDLL tx_stream::tx_stream(device &dev, size_t pool_packets, enum tx_latency_policy policy) {
     pimpl = new impl(dev, pool_packets, policy);
 }
 
-MSDLL tx_feeder::~tx_feeder() {
+MSDLL tx_stream::~tx_stream() {
     impl &m = *pimpl;
     // reclaim WHILE the workers still drain (queued packets go out at line rate and
     // their buffers come home) - a packet parked in a stopped TX queue can never be
@@ -292,12 +292,12 @@ MSDLL tx_feeder::~tx_feeder() {
     if (m.free_q.size() < m.pool_total) {
         // free only what came back; the rest stays alive for the transport (freeing
         // under a live completion is a use-after-free). Up to the URB pipeline depth
-        // is the structural cost of a one-shot feeder; more means a stuck queue.
+        // is the structural cost of a one-shot stream; more means a stuck queue.
         size_t missing = m.pool_total - m.free_q.size();
         if (missing > (size_t)RFNM_TX_ASYNC_URBS) {
-            spdlog::warn("tx_feeder: {} pool buffers still in flight at teardown (queue stuck?) - leaking them deliberately", missing);
+            spdlog::warn("tx_stream: {} pool buffers still in flight at teardown (queue stuck?) - leaking them deliberately", missing);
         } else {
-            spdlog::debug("tx_feeder: {} buffers stay with the transport until the next session wake (structural URB hold)", missing);
+            spdlog::debug("tx_stream: {} buffers stay with the transport until the next session wake (structural URB hold)", missing);
         }
         for (struct tx_buf *b : m.free_q) {
             delete[] b->buf;
@@ -313,7 +313,7 @@ MSDLL tx_feeder::~tx_feeder() {
     delete pimpl;
 }
 
-MSDLL rfnm_api_failcode tx_feeder::start_free_run() {
+MSDLL rfnm_api_failcode tx_stream::start_free_run() {
     impl &m = *pimpl;
     rfnm_api_failcode r = m.dev.tx_work_start(m.policy);
     if (r != RFNM_API_OK) {
@@ -325,7 +325,7 @@ MSDLL rfnm_api_failcode tx_feeder::start_free_run() {
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode tx_feeder::start_at(uint64_t abs_samples) {
+MSDLL rfnm_api_failcode tx_stream::start_at(uint64_t abs_samples) {
     impl &m = *pimpl;
     rfnm_api_failcode r = m.dev.tx_work_start(m.policy);
     if (r != RFNM_API_OK) {
@@ -343,7 +343,7 @@ MSDLL rfnm_api_failcode tx_feeder::start_at(uint64_t abs_samples) {
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode tx_feeder::start_earliest(uint64_t *pos_out, uint32_t margin_us, uint32_t anchor_timeout_ms) {
+MSDLL rfnm_api_failcode tx_stream::start_earliest(uint64_t *pos_out, uint32_t margin_us, uint32_t anchor_timeout_ms) {
     impl &m = *pimpl;
     rfnm_api_failcode r = m.dev.tx_work_start(m.policy);
     if (r != RFNM_API_OK) {
@@ -404,13 +404,13 @@ MSDLL rfnm_api_failcode tx_feeder::start_earliest(uint64_t *pos_out, uint32_t ma
     return RFNM_API_OK;
 }
 
-MSDLL void tx_feeder::stop() {
+MSDLL void tx_stream::stop() {
     impl &m = *pimpl;
     m.dev.tx_work_stop();
     m.started = false;
 }
 
-MSDLL rfnm_api_failcode tx_feeder::write(const int16_t *iq, size_t samples) {
+MSDLL rfnm_api_failcode tx_stream::write(const int16_t *iq, size_t samples) {
     impl &m = *pimpl;
     if (!m.started || !m.axis_ok()) {
         return RFNM_API_TX_NOT_ANCHORED;
@@ -419,7 +419,7 @@ MSDLL rfnm_api_failcode tx_feeder::write(const int16_t *iq, size_t samples) {
     return m.feed(iq, samples, iq == nullptr);
 }
 
-MSDLL rfnm_api_failcode tx_feeder::write_at(uint64_t abs_samples, const int16_t *iq, size_t samples) {
+MSDLL rfnm_api_failcode tx_stream::write_at(uint64_t abs_samples, const int16_t *iq, size_t samples) {
     impl &m = *pimpl;
     if (!m.started || !m.axis_ok()) {
         return RFNM_API_TX_NOT_ANCHORED;
@@ -462,7 +462,7 @@ MSDLL rfnm_api_failcode tx_feeder::write_at(uint64_t abs_samples, const int16_t 
     return m.feed(iq, samples, iq == nullptr);
 }
 
-MSDLL rfnm_api_failcode tx_feeder::flush(bool end_of_burst) {
+MSDLL rfnm_api_failcode tx_stream::flush(bool end_of_burst) {
     impl &m = *pimpl;
     if (!m.started || !m.axis_ok()) {
         return RFNM_API_TX_NOT_ANCHORED;
@@ -470,16 +470,16 @@ MSDLL rfnm_api_failcode tx_feeder::flush(bool end_of_burst) {
     return m.flush_short(end_of_burst);
 }
 
-MSDLL uint64_t tx_feeder::pos() {
+MSDLL uint64_t tx_stream::pos() {
     impl &m = *pimpl;
     return m.dev.tx_feed_pos() + m.stage_cnt;
 }
 
-MSDLL void tx_feeder::set_pace_lead_us(uint32_t lead_us) {
+MSDLL void tx_stream::set_pace_lead_us(uint32_t lead_us) {
     pimpl->pace_lead_us = lead_us;
 }
 
-MSDLL void tx_feeder::get_stats(stats *out) {
+MSDLL void tx_stream::get_stats(stats *out) {
     if (out) {
         *out = pimpl->st;
     }
