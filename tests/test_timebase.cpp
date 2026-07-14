@@ -1,0 +1,80 @@
+#include "unit.h"
+#include "core/timebase.h"
+
+using namespace rfnm;
+
+// The two real bench plans: 122.88 plan (dcs 122.88M -> tick 61.44 MHz) and the
+// 50M/DCS-200 plan (dcs 200M -> tick 100 MHz). The tick rate is dcs_clk/2 and NOTHING
+// else - these tests hold on both plans precisely so no 61.44-flavored constant can
+// creep back in as "the" clock.
+static timebase tb_6144() { return timebase{ 61440000ull }; }
+static timebase tb_100m() { return timebase{ 100000000ull }; }
+
+void test_timebase() {
+    // hwinfo is the ONLY tick_hz source: dcs_clk/2, zero-until-published
+    struct rfnm_dev_hwinfo hw = {};
+    CHECK(!timebase::from_hwinfo(hw).valid());
+    hw.clock.dcs_clk = 122880000ull;
+    CHECK_EQ(timebase::from_hwinfo(hw).tick_hz, 61440000ull);
+    hw.clock.dcs_clk = 200000000ull;
+    CHECK_EQ(timebase::from_hwinfo(hw).tick_hz, 100000000ull);
+
+    // invalid timebase converts to honest zeros, never a constant guess
+    timebase dead = {};
+    CHECK(!dead.valid());
+    CHECK_EQ(dead.ticks_to_ns(123456), 0);
+    CHECK_EQ(dead.ns_to_ticks(123456), 0);
+
+    // exact conversions, nearest-rounded ns
+    CHECK_EQ(tb_6144().ticks_to_ns(61440000ull), 1000000000ull);        // 1 s
+    CHECK_EQ(tb_100m().ticks_to_ns(100000000ull), 1000000000ull);
+    CHECK_EQ(tb_6144().ticks_to_ns(1), 16);                             // 16.276 ns -> 16
+    CHECK_EQ(tb_6144().ticks_to_ns(2), 33);                             // 32.552 -> 33
+    CHECK_EQ(tb_100m().ticks_to_ns(1), 10);
+    CHECK_EQ(tb_6144().ns_to_ticks(1000000000ull), 61440000ull);
+    CHECK_EQ(tb_100m().ns_to_ticks(1000000000ull), 100000000ull);
+    // nearest rounding on the way in: 8.14 ns = 0.5 ticks at 61.44M rounds up
+    CHECK_EQ(tb_6144().ns_to_ticks(9), 1);      // 0.553 ticks -> 1
+    CHECK_EQ(tb_6144().ns_to_ticks(8), 0);      // 0.491 ticks -> 0
+
+    // 128-bit intermediates: no overflow at large tick counts (days of uptime)
+    uint64_t week_ticks = 61440000ull * 3600ull * 24ull * 7ull;
+    CHECK_EQ(tb_6144().ticks_to_ns(week_ticks), 604800000000000ull);
+    CHECK_EQ(tb_6144().ns_to_ticks(604800000000000ull), week_ticks);
+
+    // duration floors are us-denominated and evaluated per plan: the TDD v2 600 us
+    // span floor is 36864 ticks on the 61.44M plan but 60000 on the 100M plan (the
+    // retired 245760-tick relic was 4 ms ONLY at 61.44M - the class this type kills)
+    CHECK_EQ(tb_6144().us_to_ticks_floor(600), 36864);
+    CHECK_EQ(tb_100m().us_to_ticks_floor(600), 60000);
+
+    // chunk ticks come from the hwinfo divider: 768 ADC samples = 384 << rx_dcs_div
+    hw.clock.rx_dcs_div = 0;
+    CHECK_EQ(rx_chunk_ticks(hw), 384);
+    hw.clock.rx_dcs_div = 1;
+    CHECK_EQ(rx_chunk_ticks(hw), 768);
+}
+
+void test_tick_ratio() {
+    // R = 2^r_shift / 2 ticks per sample, exact
+    CHECK_EQ(tick_ratio{ 0 }.r_num(), 1);
+    CHECK_EQ(tick_ratio{ 0 }.r_den(), 2);
+    CHECK_EQ(tick_ratio{ 4 }.r_num(), 16);
+
+    // 256-sample packets across the whole real shift range
+    for (uint32_t sh = 0; sh <= 9; sh++) {
+        tick_ratio r{ sh };
+        CHECK_EQ(r.samples_to_ticks(256), 128ull << sh);
+        CHECK_EQ(r.ticks_per_slot(), 128ull << sh);
+        // slot span divides 2^32: raw-u32 slot residues == extended-u64 slot residues
+        CHECK_EQ((0x100000000ull % r.ticks_per_slot()), 0);
+    }
+
+    // r_shift 0 (122.88M full rate): R = 1/2, odd counts round down half a tick
+    CHECK_EQ(tick_ratio{ 0 }.samples_to_ticks(3), 1);
+    CHECK_EQ(tick_ratio{ 0 }.samples_to_ticks(2), 1);
+    // r_shift 1 (61.44M): 1 tick per sample
+    CHECK_EQ(tick_ratio{ 1 }.samples_to_ticks(12345), 12345);
+    // r_shift 4: 8 ticks per sample
+    CHECK_EQ(tick_ratio{ 4 }.samples_to_ticks(100), 800);
+}

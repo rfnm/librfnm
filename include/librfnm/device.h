@@ -554,16 +554,7 @@ namespace rfnm {
                 uint32_t len_samples, uint8_t flags = 0, uint32_t bind = 0);
         void threadfn(size_t thread_index);
 
-        MSDLL bool unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt);
-        MSDLL bool unpack_12_to_cf32(uint8_t* dest, uint8_t* src, size_t sample_cnt);
-        MSDLL bool unpack_12_to_cs8(uint8_t* dest, uint8_t* src, size_t sample_cnt);
-        MSDLL void pack_cs16_to_12(uint8_t* dest, uint8_t* src8, int sample_cnt);
         void tx_headroom_scan(const uint8_t* buf, size_t elems);  // v4 meter (worker thread)
-
-        // local-transport cs16 payloads: format conversion without the 12-bit stage
-        MSDLL bool convert_cs16_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt);
-        MSDLL bool convert_cs16_to_cf32(uint8_t* dest, uint8_t* src, size_t sample_cnt);
-        MSDLL bool convert_cs16_to_cs8(uint8_t* dest, uint8_t* src, size_t sample_cnt);
 
         MSDLL int single_ch_id_bitmap_to_adc_id(uint8_t ch_ids);
         void dqbuf_overwrite_cc_locked(uint8_t adc_id);

@@ -10,6 +10,7 @@ endif()
 option(BUILD_RFNM_UTILS "Build RFNM utilities such as rfnm_info" ON)
 option(BUILD_RFNM_LOCAL_TRANSPORT "Enable local transport (turn on if compiling on the rfnm device itself)" OFF)
 option(INSTALL_UDEV_RULES "Install UDEV rules (Linux only)" ON)
+option(BUILD_RFNM_TESTS "Build the unit test layer (tests/): pure-function pins for timebase/extension/pad/pack" OFF)
 
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
@@ -35,7 +36,7 @@ endif ()
 if(BUILD_RFNM_LOCAL_TRANSPORT)
   message(STATUS "Adding AArch64 optimization flags to rfnm_obj")
   set_source_files_properties(
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/pack.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/core/pack.cpp"
     PROPERTIES
       COMPILE_FLAGS "-std=c99 -mcpu=cortex-a53 -Wall -Wextra -O3 \
                       -fopenmp-simd -fdump-tree-vect-details -fopt-info-note-missed"
@@ -128,6 +129,22 @@ endif()
 # Install UDEV rules
 if (LINUX AND INSTALL_UDEV_RULES)
     install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/rfnm.rules DESTINATION ${CMAKE_INSTALL_LIBDIR}/udev/rules.d)
+endif ()
+
+# Unit test layer: pure functions only (timebase math, tick extension, pad/congruence
+# plans, wire pack/unpack golden vectors) - no libusb/spdlog, runs anywhere
+if (BUILD_RFNM_TESTS)
+    enable_testing()
+    add_executable(rfnm_unit
+        tests/unit_main.cpp
+        tests/test_timebase.cpp
+        tests/test_extender.cpp
+        tests/test_pad.cpp
+        tests/test_pack.cpp
+        src/core/pack.cpp)
+    target_include_directories(rfnm_unit PRIVATE include src)
+    target_compile_features(rfnm_unit PRIVATE cxx_std_17)
+    add_test(NAME rfnm_unit COMMAND rfnm_unit)
 endif ()
 
 # Build utils if enabled
