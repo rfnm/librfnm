@@ -3352,17 +3352,25 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
                         return (rfnm_api_failcode)r_res.base.rx_ecodes[q];
                     }
                 }
-                if (applies_ch_tx) {
-                    // refresh the timing anchor for positional stamping and restart
-                    // the feed position: this apply mints a fresh tx_t0 and rebases
-                    // the ring, so feed position 0 airs at the new anchor. NOTE the
-                    // mint is NOT always synchronous with the apply result (Blue:
-                    // yes, defect #13; geul: it lands after ~800 ms of async FE
-                    // programming) - so the session anchor latch is INVALIDATED
-                    // here, not re-latched: it pins at the client's next
-                    // tx_feed_seek_to (after waiting for the epoch to CHANGE) or
-                    // at the first stamped packet. Stamping from a possibly-stale
-                    // refresh here is exactly the +880 ms wild-stamp bug.
+                if (applies_ch_tx && (r_res.timing_break & 0x2)) {
+                    // the device says THIS apply actually broke the TX timeline
+                    // (v5 timing_break bit1: a real stream send / re-mint - Blue
+                    // sets it only on non-deduped sends, geul on every TXIQ), so
+                    // the feed axis rebases: feed position 0 airs at the NEW
+                    // anchor. The mint is NOT always synchronous with the apply
+                    // result (Blue: yes; geul: ~800 ms async FE programming) - so
+                    // the session anchor latch is INVALIDATED here, not re-latched:
+                    // it pins at the client's next tx_feed_seek_to (after
+                    // apply_timing_settled) or at the first stamped packet.
+                    // Stamping from a possibly-stale refresh here is exactly the
+                    // +880 ms wild-stamp bug.
+                    // A FE-only TX apply (deduped word, bit1 clear) MUST leave the
+                    // feed axis alone: zeroing feed_pos while the device kept its
+                    // timeline forked the client's feed accounting from the lib's
+                    // by exactly the already-fed span - every subsequent stamp
+                    // landed that many samples early (the r9 UL-dark bug: the OAI
+                    // shim's lazy power re-apply at first UL write cost a constant
+                    // -3.33 ms on every burst).
                     get(REQ_DEV_STATUS);
                     std::lock_guard<std::mutex> lg(tx_s.in_mutex);
                     tx_s.feed_pos = 0;
