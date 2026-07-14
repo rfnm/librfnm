@@ -141,6 +141,7 @@ if (BUILD_RFNM_TESTS)
         tests/test_extender.cpp
         tests/test_pad.cpp
         tests/test_pack.cpp
+        tests/test_errors.cpp
         src/core/pack.cpp)
     target_include_directories(rfnm_unit PRIVATE include src)
     target_compile_features(rfnm_unit PRIVATE cxx_std_17)

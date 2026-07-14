@@ -7,6 +7,7 @@ void test_tick_ratio();
 void test_extender();
 void test_pad_plan();
 void test_pack();
+void test_errors();
 
 int main() {
     test_timebase();
@@ -14,6 +15,7 @@ int main() {
     test_extender();
     test_pad_plan();
     test_pack();
+    test_errors();
 
     if (g_failures) {
         std::printf("rfnm_unit: %d FAILURE(S)\n", g_failures);

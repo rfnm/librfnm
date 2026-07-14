@@ -107,6 +107,112 @@ namespace rfnm {
         uint8_t is_tx;
     };
 
+    // ---- v2 P2 surface (docs/librfnm-v2-p2-surface-2026-07-14.md). Additive for now:
+    // the legacy getters these merge are deleted at the P2 break wave. ----
+
+    enum stream_dir {
+        DIR_RX,
+        DIR_TX,
+    };
+
+    // ONE timing snapshot for either direction (replaces the rx_timing/tx_timing twins
+    // and their divergent t0 semantics). t0_ext extension rule, stated: while an RX
+    // stream is (or was) live, BOTH directions extend into the RX stamps' 64-bit
+    // domain - "tick T" means one instant across RX and TX, usable directly against
+    // rx stamps and clock_now(); with no RX extension yet, t0_ext is the raw 32-bit
+    // anchor zero-extended.
+    struct timing {
+        uint64_t tick_hz;   // dcs_clk/2 for this clock plan (hwinfo-published); 0 = plan unknown
+        uint32_t r_num;     // ticks per sample = r_num / r_den, exact, from the APPLIED stream word
+        uint32_t r_den;
+        uint64_t t0_ext;    // extended tick of this direction's epoch anchor
+        uint32_t epoch;     // stream generation (u8 on the v5 wire; widens end-to-end at v6)
+        bool anchored;      // epoch != 0: the anchor and R are live
+    };
+
+    // ONE health snapshot: every device-side counter in one status round trip, plus
+    // the host-local stream counters (no extra RTT). Cumulative since module load
+    // (device side) / since open (host side) - snapshot at session start, diff at the
+    // incident.
+    struct health {
+        // rx device-side
+        uint32_t rx_regates;            // fw lane parks (overrun heals) this epoch
+        // tx device-side
+        uint32_t tx_underruns;          // fw DAC starvation events
+        uint32_t tx_timed_rejects;      // kernel scheduled-packet rejects
+        uint32_t tx_pos_placed;         // POS placement outcomes (late/stale/misaligned = YOUR dropped feed)
+        uint32_t tx_pos_late;
+        uint32_t tx_pos_stale;
+        uint32_t tx_pos_misaligned;
+        uint32_t tx_pace_rolls;         // mispaced-start regate requests
+        uint32_t tx_arm_repairs;        // self-heal re-applies that carried TX (client-invisible re-mints)
+        uint64_t tx_last_late_cc;       // cc of the most recent late/stale placement
+        uint32_t tx_ring_read_ptr;      // fw read position / kernel write head (ring slots):
+        uint32_t tx_ring_head;          // a positional client's REAL margin is stamp-slot minus read_ptr
+        // host-local
+        uint64_t rx_stamp_disconts;     // clean flagged seams (window boundaries, self-heals)
+        uint64_t rx_stamp_breaks;       // unflagged chain breaks - ANY nonzero count is a bug somewhere
+        uint64_t rx_pkts_ok;
+        uint64_t rx_pkts_dropped;       // rising = the transport cannot sustain the rate
+        int32_t tx_headroom_peak_abs;   // peak |sample| at the wire (12-bit wire keeps bits [15:4])
+        uint64_t tx_headroom_scanned;
+    };
+
+    // The device-published contract constants, one fetch (never hardcode these).
+    struct feed_contract {
+        uint32_t tx_feed_lead_ticks;    // the HONEST usable minimum TX write lead - budget from this
+        uint32_t rx_flush_deadline_us;  // partial-RX-packet flush deadline (bounds delivery latency)
+        uint32_t anchor_step_ticks;     // the anchor congruence step for the applied stream word
+    };
+
+    // Error classes over the v5 failcode values (the numbers ride the wire in apply
+    // ecodes, so they stay pinned until the v6 break; the names and classes are
+    // host-side). WOULD_BLOCK/NOT_SATISFIED below are the correct names for two
+    // misnamed codes - the old names die at the P2 break wave.
+    enum rfnm_error_class {
+        ERR_OK,
+        ERR_VALIDATION,             // the request itself is invalid (range, enum, plan)
+        ERR_TRANSPORT_TERMINAL,     // the session is over; reopen (or upgrade) to recover
+        ERR_FLOW,                   // backpressure / not-yet - retry is the contract
+        ERR_SCHEDULE,               // scheduling contract violated (late, misaligned, order...)
+        ERR_STATE,                  // session-state precondition missing (anchor, buffers)
+    };
+
+    const rfnm_api_failcode RFNM_API_MIN_QBUF_CNT_NOT_SATISFIED = RFNM_API_MIN_QBUF_CNT_NOT_SATIFIED;
+    const rfnm_api_failcode RFNM_API_WOULD_BLOCK = RFNM_API_MIN_QBUF_QUEUE_FULL;
+
+    inline enum rfnm_error_class failcode_class(rfnm_api_failcode c) {
+        switch (c) {
+        case RFNM_API_OK:
+            return ERR_OK;
+        case RFNM_API_PROBE_FAIL:
+        case RFNM_API_TUNE_FAIL:
+        case RFNM_API_GAIN_FAIL:
+        case RFNM_API_NOT_SUPPORTED:
+            return ERR_VALIDATION;
+        case RFNM_API_USB_FAIL:
+        case RFNM_API_RX_PIPE_DEAD:
+        case RFNM_API_SW_UPGRADE_REQUIRED:
+            return ERR_TRANSPORT_TERMINAL;
+        case RFNM_API_TIMEOUT:
+        case RFNM_API_DQBUF_OVERFLOW:
+        case RFNM_API_DQBUF_NO_DATA:
+        case RFNM_API_MIN_QBUF_QUEUE_FULL:      // = WOULD_BLOCK
+            return ERR_FLOW;
+        case RFNM_API_SCHED_NO_ANCHOR:
+        case RFNM_API_SCHED_MISALIGNED:
+        case RFNM_API_SCHED_LATE:
+        case RFNM_API_SCHED_FULL:
+        case RFNM_API_SCHED_ORDER:
+        case RFNM_API_SCHED_NOT_RESET:
+            return ERR_SCHEDULE;
+        case RFNM_API_MIN_QBUF_CNT_NOT_SATIFIED:
+        case RFNM_API_TX_NOT_ANCHORED:
+        default:
+            return ERR_STATE;
+        }
+    }
+
     class rx_stream;
 
     class device {
@@ -211,6 +317,20 @@ namespace rfnm {
         // (sampled 1-in-16 packets). The 12-bit wire drops the low 4 bits - a peak far
         // below full scale means few effective bits on air.
         MSDLL void get_tx_headroom(int32_t *peak_abs, uint64_t *samples_scanned);
+
+        // ---- v2 P2 surface (see the struct block above; additive until the break wave) ----
+        // ONE timing snapshot per direction (one status refresh - the anchor-freshness
+        // contract; never serves a stale cache).
+        MSDLL rfnm_api_failcode get_timing(enum stream_dir dir, struct timing *t);
+        // Board time in extended ticks, no stream required. Freshness = one status
+        // round trip (~ms class: a true board-side capture; transit adds age, never
+        // error). Same domain as the RX stamps whenever an RX stream is live, else
+        // self-extended from this handle's first call (call at least once per ~35 s).
+        MSDLL rfnm_api_failcode clock_now(uint64_t *tick_ext);
+        // ONE health snapshot (one status refresh + the host-local counters).
+        MSDLL rfnm_api_failcode get_health(struct health *h);
+        // The device-published contract constants (one status refresh).
+        MSDLL rfnm_api_failcode get_contract(struct feed_contract *c);
 
         // pump-event telemetry: cumulative device-side self-heal counters (since
         // module load - snapshot at session start, diff at the incident). tx_pace_rolls
