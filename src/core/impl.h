@@ -450,4 +450,14 @@ namespace rfnm {
 #ifdef BUILD_RFNM_LOCAL_TRANSPORT
     void local_find_into(std::vector<struct dev_info> &found);
 #endif
+
+    // RFNM_DEBUG=stall,rx,cclog:<path> - THE debug knob (comma tokens; cclog carries
+    // its output path after the colon). Parsed once at first use (pump.cpp), so hot
+    // paths read a bool instead of walking environ per packet.
+    struct debug_knobs {
+        bool stall;
+        bool rx;
+        const char *cclog_path;     // nullptr = off
+    };
+    const debug_knobs &debug_knob();
 }

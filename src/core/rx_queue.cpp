@@ -97,7 +97,7 @@ int device::impl::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
     // special case for first buffer of stream
     if (rx_s.usb_cc[adc_id] == UINT64_MAX) {
         int ret = 0;
-        if (getenv("RFNM_DEBUG_RX")) {
+        if (debug_knob().rx) {
             spdlog::info("CCINIT adc {} queue_size {}", adc_id, queue_size);
         }
 
@@ -227,7 +227,7 @@ int device::impl::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         if (buf->usb_cc < rx_s.usb_cc[adc_id] || far_newer) {
 
             uint64_t usb_cc = buf->usb_cc;
-            if (getenv("RFNM_DEBUG_RX")) {
+            if (debug_knob().rx) {
                 spdlog::info("DISCARD adc {} buf_cc {} expected_cc {} qsize {}", adc_id, usb_cc, rx_s.usb_cc[adc_id], queue_size);
             }
             std::lock_guard<std::mutex> lockGuard(rx_s.in_mutex);
@@ -277,7 +277,7 @@ int device::impl::dqbuf_is_cc_continuous(uint8_t adc_id, int acquire_lock) {
         return 1;
     }
     else {
-        if (getenv("RFNM_DEBUG_RX") && buf->usb_cc != rx_s.usb_cc[adc_id]) {
+        if (debug_knob().rx && buf->usb_cc != rx_s.usb_cc[adc_id]) {
             static int dbg_throttle;
             if (++dbg_throttle % 50 == 1) {
                 spdlog::info("NOTCONT adc {} top_cc {} expected {} qsize {}", adc_id, buf->usb_cc, rx_s.usb_cc[adc_id], queue_size);
@@ -392,7 +392,7 @@ rfnm_api_failcode device::impl::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
         }
 
         if (!dqbuf_is_cc_continuous(required_adc_id, 1)) {
-            if (getenv("RFNM_DEBUG_RX")) {
+            if (debug_knob().rx) {
                 std::lock_guard<std::mutex> lockGuard(rx_s.out_mutex);
                 uint64_t topcc = rx_s.out[required_adc_id].size() ? rx_s.out[required_adc_id].top()->usb_cc : 0;
                 spdlog::info("STUCK adc {} expected_cc {} qsize {} top_cc {}", required_adc_id,

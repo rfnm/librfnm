@@ -528,7 +528,7 @@ rx_pass_result device::impl::usb_rx_pass(worker_ctx &c) {
     // async engine on the primary handle only (the second-cable boost ping-pong never
     // shipped, and the pump keeps strict per-endpoint ordering on primary)
     libusb_device_handle* lusb_handle = usb_handle->primary;
-    if (getenv("RFNM_DEBUG_STALL")) {
+    if (debug_knob().stall) {
         static thread_local auto last_census = std::chrono::high_resolution_clock::now();
         auto nowc = std::chrono::high_resolution_clock::now();
         if (std::chrono::duration_cast<std::chrono::milliseconds>(nowc - last_census).count() > 1000) {

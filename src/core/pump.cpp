@@ -22,6 +22,44 @@ using namespace rfnm;
 std::mutex rfnm::rfnm_rx_in_nap_mutex;
 std::condition_variable rfnm::rfnm_rx_in_nap_cv;
 
+// RFNM_DEBUG=stall,rx,cclog:<path> (see impl.h). Unknown tokens warn instead of
+// failing silently - a misspelled debug request must not look like quiet hardware.
+const rfnm::debug_knobs &rfnm::debug_knob() {
+    static const debug_knobs k = [] {
+        debug_knobs d = {};
+        static std::string cclog_store;
+        const char *e = getenv("RFNM_DEBUG");
+        if (!e) {
+            return d;
+        }
+        std::string s(e);
+        size_t pos = 0;
+        while (pos <= s.size()) {
+            size_t c = s.find(',', pos);
+            std::string tok = s.substr(pos, c == std::string::npos ? std::string::npos : c - pos);
+            if (tok == "stall") {
+                d.stall = true;
+            }
+            else if (tok == "rx") {
+                d.rx = true;
+            }
+            else if (tok.rfind("cclog:", 0) == 0 && tok.size() > 6) {
+                cclog_store = tok.substr(6);
+                d.cclog_path = cclog_store.c_str();
+            }
+            else if (!tok.empty()) {
+                spdlog::warn("RFNM_DEBUG: unknown token '{}' (know: stall, rx, cclog:<path>)", tok);
+            }
+            if (c == std::string::npos) {
+                break;
+            }
+            pos = c + 1;
+        }
+        return d;
+    }();
+    return k;
+}
+
 void device::impl::reorder_tx_queue_nolock(tx_queue_s& q) {
     std::vector<tx_buf*> temp;
 
@@ -79,7 +117,7 @@ bool device::impl::rx_deliver(worker_ctx &c, struct rx_buf *buf) {
 
     if (lrxbuf->magic != 0x7ab8bd6f || lrxbuf->adc_id > 3 ||
             lrxbuf->elem_cnt == 0 || lrxbuf->elem_cnt > RFNM_USB_RX_PACKET_ELEM_CNT) {
-        if (getenv("RFNM_DEBUG_RX")) {
+        if (debug_knob().rx) {
             static std::atomic<int> dbg_rej{0};
             int nr = ++dbg_rej;
             if (nr <= 10 || nr % 500 == 0) {
@@ -122,15 +160,15 @@ bool device::impl::rx_deliver(worker_ctx &c, struct rx_buf *buf) {
     buf->phytimer = lrxbuf->phytimer;
     buf->elem_cnt = lrxbuf->elem_cnt;
 
-    if (getenv("RFNM_DEBUG_RX")) {
+    if (debug_knob().rx) {
         static std::atomic<int> dbg_push{0};
         int n = ++dbg_push;
         if (n <= 15 || n % 100 == 0) {
             spdlog::info("PUSH n {} adc {} usb_cc {} magic_ok", n, (uint32_t)lrxbuf->adc_id, (uint64_t)lrxbuf->usb_cc);
         }
     }
-    if (getenv("RFNM_DEBUG_RX_CCLOG")) {
-        static FILE *ccf = fopen(getenv("RFNM_DEBUG_RX_CCLOG"), "w");
+    if (debug_knob().cclog_path) {
+        static FILE *ccf = fopen(debug_knob().cclog_path, "w");
         if (ccf) {
             fprintf(ccf, "%llu %u %u\n", (unsigned long long)lrxbuf->usb_cc, (uint32_t)lrxbuf->adc_id, (uint32_t)lrxbuf->elem_cnt);
         }
@@ -179,15 +217,14 @@ void device::impl::status_poll_pass(worker_ctx &c) {
         // USB: when worker 1 runs an RX session it already keeps the 1 ms freshness,
         // so worker 0 skips the poll outright; solo TX-only sessions drop to a 3 ms
         // backstop cadence (pacing feedback lag ~6 packets vs the 2000-packet cc
-        // window). RFNM_STATUS_POLL_LEGACY=1 restores the queued-work-only gate.
+        // window).
         bool tx_work_pending = false;
-        static const bool poll_legacy = getenv("RFNM_STATUS_POLL_LEGACY") != nullptr;
         if (c.index == 0) {
             {
                 std::lock_guard<std::mutex> lg(tx_s.in_mutex);
                 tx_work_pending = !tx_s.in.empty();
             }
-            if (!tx_work_pending && !poll_legacy && thread_data[c.index].tx_active &&
+            if (!tx_work_pending && thread_data[c.index].tx_active &&
                     transport_status.transport == TRANSPORT_USB) {
                 if (thread_data[1].rx_active) {
                     tx_work_pending = true;    // worker 1 owns freshness
@@ -202,7 +239,7 @@ void device::impl::status_poll_pass(worker_ctx &c) {
         // the 1 ms cadence for TCP (its gate above only skips while TX work is
         // queued); worker 1 backstops at 3 ms staleness so RX-only sessions and
         // saturated-TX shapes (worker 0 permanently queued) never go stale.
-        if (c.index == 1 && !poll_legacy &&
+        if (c.index == 1 &&
                 transport_status.transport == TRANSPORT_TCP &&
                 ms_int.count() <= 3) {
             tx_work_pending = true;    // reuse the skip flag
@@ -295,7 +332,7 @@ void device::impl::worker(size_t index) {
             {
                 struct rx_buf* buf;
 
-                if (getenv("RFNM_DEBUG_STALL") && index == 1) {
+                if (debug_knob().stall && index == 1) {
                     static thread_local auto last_census2 = std::chrono::high_resolution_clock::now();
                     auto nowc2 = std::chrono::high_resolution_clock::now();
                     if (std::chrono::duration_cast<std::chrono::milliseconds>(nowc2 - last_census2).count() > 1000) {

@@ -283,7 +283,7 @@ void device::impl::local_tx_send(worker_ctx &c) {
         spdlog::error("TX queue error");
     }
     else {
-        if (getenv("RFNM_DEBUG_RX")) {
+        if (debug_knob().rx) {
             static std::atomic<int> dbg_txs{0};
             int n = ++dbg_txs;
             if (n <= 3 || n % 50 == 0) {
