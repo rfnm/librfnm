@@ -60,7 +60,7 @@ MSDLL rfnm_api_failcode device::schedule_rx(uint64_t tick, uint32_t len_samples,
 MSDLL rfnm_api_failcode device::anchor_at(uint64_t tick) {
     // sticky session anchor (kind 4 on the schedule verb): phase congruence and
     // re-mint stickiness live kernel/M4-side - see the header contract. USB/TCP are
-    // fire-and-forget; verify via get_rx_timing/get_tx_timing after the next apply.
+    // fire-and-forget; verify via get_timing after the next apply.
     return pimpl->schedule_ctl(tick, 4 /* ANCHOR */, 0, 0, 1 /* flags bit0: tick valid */, 0);
 }
 

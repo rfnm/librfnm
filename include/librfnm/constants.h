@@ -103,13 +103,6 @@ namespace rfnm {
         REQ_DEV_STATUS = (0x1 << 4),
     };
 
-    enum debug_level {
-        DEBUG_NONE = 0,
-        DEBUG_ERROR = (0x1 << 1),
-        DEBUG_INFO = (0x1 << 2),
-        DEBUG_VERBOSE = (0x1 << 3),
-    };
-
     enum stream_format {
         STREAM_FORMAT_CS8 = 2,
         STREAM_FORMAT_CS16 = 4,

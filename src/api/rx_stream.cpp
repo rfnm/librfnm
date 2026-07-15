@@ -260,7 +260,7 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     // the stream ack is live after the apply: R, tick rate and epoch for the exact
     // stamp-derived timeline (timestamps + gap handling). Without it (pathological),
     // fall back to the legacy counted clock.
-    timing_valid = (dev.get_rx_timing(&timing) == RFNM_API_OK &&
+    timing_valid = (dev.get_timing(DIR_RX, &timing) == RFNM_API_OK && timing.anchored &&
             timing.r_num > 0 && timing.r_den > 0 && timing.tick_hz > 0);
     if (!timing_valid) {
         spdlog::warn("rx timing anchor unavailable - timestamps fall back to a counted clock");

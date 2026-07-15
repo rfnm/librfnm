@@ -383,6 +383,10 @@ namespace rfnm {
         // s_dev_status_mutex - tx_qbuf stamps packets from this cache under the same
         // lock, so a torn tx_t0/tx_epoch pair at a self-heal re-mint is impossible)
         struct transport_status transport_status = {};
+
+        // open() behavior (enum open_flags): set once in the constructor before any
+        // transport opens; OPEN_OBSERVER suppresses the session-ownership SM reset
+        uint32_t open_flags = 0;
         struct rfnm_dev_hwinfo hwinfo = {};
         struct rfnm_dev_tx_ch_list tx = {};
         struct rfnm_dev_rx_ch_list rx = {};

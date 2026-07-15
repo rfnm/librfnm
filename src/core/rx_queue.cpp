@@ -453,8 +453,8 @@ rfnm_api_failcode device::impl::rx_dqbuf(struct rx_buf** buf, uint8_t ch_ids, ui
                 rx_s.phytimer_discont[a]++;
             } else if (cc_seam) {
                 // stamp jump across a transport hole: usb_cc_dropped already carries this
-                // loss; counting it as a break too would make get_rx_timing_health's "any
-                // break is a bug" contract impossible to hold on a saturated link. Re-anchor.
+                // loss; counting it as a break too would make health.rx_stamp_breaks'
+                // "any break is a bug" contract impossible to hold on a saturated link. Re-anchor.
             } else if (lb->phytimer != rx_s.expected_phytimer[a]) {
                 // silent chain break: samples were lost somewhere nothing flagged and
                 // nothing counted - a genuine protocol error

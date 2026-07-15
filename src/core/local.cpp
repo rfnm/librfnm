@@ -59,10 +59,10 @@ bool device::impl::local_open() {
 
     transport_status.theoretical_mbps = 3500;
 
-    // RFNM_NO_SM_RESET: open without resetting the stream state machine, so a second
+    // OPEN_OBSERVER: open without resetting the stream state machine, so a second
     // local client (e.g. an RX-only observer) can coexist with a running daemon's
-    // stream instead of killing it. Bench/measurement knob - the reset stays the default.
-    if (!getenv("RFNM_NO_SM_RESET")) {
+    // stream instead of killing it. The ownership-taking reset stays the default.
+    if (!(open_flags & OPEN_OBSERVER)) {
         if (ioctl(fd, RFNM_IOCTL_BASE + (0xff & RFNM_GET_SM_RESET), &ep_ctrl_buf) < 0) {
             spdlog::error("Couldn't reset state machine");
             goto exit_close_local;

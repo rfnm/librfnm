@@ -134,7 +134,7 @@ struct tx_stream::impl {
         if (!pace_clock_valid ||
                 std::chrono::duration_cast<std::chrono::milliseconds>(now_host - pace_clock_host).count() > 20) {
             uint64_t t = 0;
-            if (dev.get_phytimer(&t)) {
+            if (dev.clock_now(&t)) {
                 return;     // clock unreadable: never block the feed on telemetry
             }
             pace_clock_ext = t;
@@ -234,8 +234,8 @@ struct tx_stream::impl {
     // runs - then priming is both unnecessary and harmful (stamped at stale feed
     // positions = loud late drops), so it is strictly conditional.
     void prime_if_virgin() {
-        struct tx_timing tt = {};
-        if (dev.get_tx_timing(&tt) == RFNM_API_OK) {
+        struct timing t = {};
+        if (dev.get_timing(DIR_TX, &t) == RFNM_API_OK && t.anchored) {
             return;     // anchored = pump live
         }
         for (int i = 0; i < PRIME_PACKETS; i++) {
@@ -258,13 +258,13 @@ struct tx_stream::impl {
     }
 
     bool cache_timing() {
-        struct tx_timing tt = {};
-        if (dev.get_tx_timing(&tt) != RFNM_API_OK) {
+        struct timing t = {};
+        if (dev.get_timing(DIR_TX, &t) != RFNM_API_OK || !t.anchored) {
             return false;
         }
-        tick_hz = tt.tick_hz;
-        r_num = tt.r_num;
-        r_den = tt.r_den;
+        tick_hz = t.tick_hz;
+        r_num = t.r_num;
+        r_den = t.r_den;
         return true;
     }
 };
@@ -354,17 +354,17 @@ MSDLL rfnm_api_failcode tx_stream::start_earliest(uint64_t *pos_out, uint32_t ma
     m.prime_if_virgin();
 
     // wait for the anchor (VSPA pipeline start is ~250 ms after a cold arm)
-    struct tx_timing tt = {};
+    struct timing t = {};
     auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(anchor_timeout_ms);
-    while ((r = m.dev.get_tx_timing(&tt)) != RFNM_API_OK) {
+    while (m.dev.get_timing(DIR_TX, &t) != RFNM_API_OK || !t.anchored) {
         if (std::chrono::steady_clock::now() >= until) {
             return RFNM_API_SCHED_NO_ANCHOR;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    m.tick_hz = tt.tick_hz;
-    m.r_num = tt.r_num;
-    m.r_den = tt.r_den;
+    m.tick_hz = t.tick_hz;
+    m.r_num = t.r_num;
+    m.r_den = t.r_den;
     if (!m.tick_hz) {
         return RFNM_API_SCHED_NO_ANCHOR;    // no clock plan published: nothing to compute against
     }
@@ -372,17 +372,17 @@ MSDLL rfnm_api_failcode tx_stream::start_earliest(uint64_t *pos_out, uint32_t ma
     // earliest placeable position: now + max(margin, the device's published lead),
     // converted through the DERIVED ratio, 256-floor (the receipted composition)
     uint64_t now_ext = 0;
-    if ((r = m.dev.get_phytimer(&now_ext))) {
+    if ((r = m.dev.clock_now(&now_ext))) {
         return r;
     }
-    uint32_t dt = (uint32_t)now_ext - (uint32_t)tt.t0;      // raw-32, wrap-exact
+    uint32_t dt = (uint32_t)now_ext - (uint32_t)t.t0_ext;   // raw-32, wrap-exact
     timebase tb{ m.tick_hz };
     uint64_t margin_ticks = tb.us_to_ticks_floor(margin_us ? margin_us : 2000);
-    uint32_t lead = 0, flushdl = 0;
-    if (!m.dev.get_feed_contract(&lead, &flushdl) && lead > margin_ticks) {
-        margin_ticks = lead;
+    struct feed_contract fc = {};
+    if (m.dev.get_contract(&fc) == RFNM_API_OK && fc.tx_feed_lead_ticks > margin_ticks) {
+        margin_ticks = fc.tx_feed_lead_ticks;
     }
-    uint64_t airpos = ((((uint64_t)dt + margin_ticks) * tt.r_den) / tt.r_num) & ~255ull;
+    uint64_t airpos = ((((uint64_t)dt + margin_ticks) * t.r_den) / t.r_num) & ~255ull;
 
     uint64_t cur = m.dev.tx_feed_pos();
     if (airpos > cur) {

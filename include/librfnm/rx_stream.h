@@ -51,7 +51,7 @@ namespace rfnm {
         // sample to deliver, next_stamp_ext chains per-channel contiguity. A chain
         // mismatch marks gap_pending; read() finishes short and the next read()
         // realigns every channel on the stamps and jumps the timeline truthfully.
-        struct rx_timing timing = {};
+        struct timing timing = {};
         bool timing_valid = false;
         uint64_t t0_ext = 0;
         uint64_t pos_samples = 0;

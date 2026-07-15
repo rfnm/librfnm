@@ -123,17 +123,6 @@ MSDLL rfnm_api_failcode device::rx_flush(uint32_t timeout_us, uint8_t ch_ids) {
     return pimpl->rx_flush(timeout_us, ch_ids);
 }
 
-MSDLL void device::get_rx_stream_stats(uint64_t &ok, uint64_t &dropped) {
-    impl& m = *pimpl;
-    // unlocked reads: aligned 64-bit loads of monotonic counters, good enough for stats
-    ok = 0;
-    dropped = 0;
-    for (int adc_id = 0; adc_id < 4; adc_id++) {
-        ok += m.rx_s.usb_cc_ok[adc_id];
-        dropped += m.rx_s.usb_cc_dropped[adc_id];
-    }
-}
-
 MSDLL rfnm_api_failcode device::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us) {
     return pimpl->tx_qbuf(buf, timeout_us);
 }

@@ -8,22 +8,6 @@
 
 using namespace rfnm;
 
-MSDLL rfnm_api_failcode device::get_rx_timing(struct rx_timing *t) {
-    impl& m = *pimpl;
-    m.get(REQ_DEV_STATUS);
-    tick_ratio r{ m.dev_status.rx_r_shift };
-
-    t->tick_hz = timebase::from_hwinfo(m.hwinfo).tick_hz;
-    t->r_num = r.r_num();
-    t->r_den = r.r_den();
-    t->epoch = (uint8_t)(m.dev_status.rx_epoch & 0xFF);
-    t->regates = m.dev_status.rx_regate_cnt;
-    // the epoch anchor: extend against the received stream when possible, else raw
-    t->t0 = m.ses.rx_ext[0].valid ? rx_tick_extend(m.dev_status.rx_t0, 0)
-                                  : (uint64_t)m.dev_status.rx_t0;
-    return m.dev_status.rx_epoch ? RFNM_API_OK : RFNM_API_DQBUF_NO_DATA;
-}
-
 MSDLL uint64_t device::rx_tick_extend(uint32_t stamp, uint32_t adc_id) {
     impl& m = *pimpl;
     if (adc_id > 3) {
@@ -59,110 +43,6 @@ MSDLL rfnm_api_failcode device::get_rx_delivered(uint64_t *delivered_samples,
     }
     if (tick_at_delivered) {
         *tick_at_delivered = m.ses.delivered_end_tick[adc_id];
-    }
-    return RFNM_API_OK;
-}
-
-MSDLL void device::get_rx_timing_health(uint64_t *disconts, uint64_t *breaks) {
-    impl& m = *pimpl;
-    uint64_t d = 0, b = 0;
-    for (int a = 0; a < 4; a++) {
-        d += m.rx_s.phytimer_discont[a];
-        b += m.rx_s.phytimer_break[a];
-    }
-    if (disconts) *disconts = d;
-    if (breaks) *breaks = b;
-}
-
-MSDLL rfnm_api_failcode device::get_tx_timing(struct tx_timing *t) {
-    impl& m = *pimpl;
-    m.get(REQ_DEV_STATUS);
-    tick_ratio r{ m.dev_status.tx_r_shift };
-    t->t0 = m.dev_status.tx_t0;
-    t->tick_hz = timebase::from_hwinfo(m.hwinfo).tick_hz;
-    t->r_num = r.r_num();
-    t->r_den = r.r_den();
-    t->epoch = (uint8_t)(m.dev_status.tx_epoch & 0xFF);
-    t->underruns = m.dev_status.tx_underrun_cnt;
-    t->timed_rejects = m.dev_status.tx_timed_reject_cnt;
-    return m.dev_status.tx_epoch ? RFNM_API_OK : RFNM_API_DQBUF_NO_DATA;
-}
-
-MSDLL rfnm_api_failcode device::get_phytimer(uint64_t *tick) {
-    impl& m = *pimpl;
-    if (m.get(REQ_DEV_STATUS)) {
-        return RFNM_API_USB_FAIL;
-    }
-    uint32_t raw = m.dev_status.phytimer_now;
-    if (m.ses.rx_ext[0].valid) {
-        // an RX stream is (or was) live: stay in the stamps' extended domain
-        *tick = m.ses.rx_ext[0].extend_near(raw);
-        return RFNM_API_OK;
-    }
-    // stream-less: unwrap against this handle's previous read (exact within +-35 s)
-    *tick = m.ses.ptmr_ext.step(raw);
-    return RFNM_API_OK;
-}
-
-MSDLL rfnm_api_failcode device::get_feed_contract(uint32_t *tx_feed_lead_ticks, uint32_t *rx_flush_deadline_us) {
-    impl& m = *pimpl;
-    if (m.get(REQ_DEV_STATUS)) {
-        return RFNM_API_USB_FAIL;
-    }
-    if (tx_feed_lead_ticks) {
-        // ONE lead number, the honest usable minimum (the legacy advisory field
-        // over-promises by the mode - budget from this)
-        *tx_feed_lead_ticks = m.dev_status.tx_feed_min_lead_ticks ?
-                m.dev_status.tx_feed_min_lead_ticks : m.dev_status.tx_feed_lead_ticks;
-    }
-    if (rx_flush_deadline_us) {
-        *rx_flush_deadline_us = m.dev_status.rx_flush_deadline_us;
-    }
-    return RFNM_API_OK;
-}
-
-MSDLL rfnm_api_failcode device::get_tx_pos_stats(uint32_t *placed, uint32_t *late,
-        uint32_t *stale, uint32_t *misaligned) {
-    impl& m = *pimpl;
-    if (m.get(REQ_DEV_STATUS)) {
-        return RFNM_API_USB_FAIL;
-    }
-    if (placed) {
-        *placed = m.dev_status.tx_pos_placed;
-    }
-    if (late) {
-        *late = m.dev_status.tx_pos_late;
-    }
-    if (stale) {
-        *stale = m.dev_status.tx_pos_stale;
-    }
-    if (misaligned) {
-        *misaligned = m.dev_status.tx_pos_misaligned;
-    }
-    return RFNM_API_OK;
-}
-
-MSDLL rfnm_api_failcode device::get_anchor_step(uint32_t *step_ticks) {
-    impl& m = *pimpl;
-    if (m.get(REQ_DEV_STATUS)) {
-        return RFNM_API_USB_FAIL;
-    }
-    if (step_ticks) {
-        *step_ticks = m.dev_status.sched_anchor_step_ticks;
-    }
-    return RFNM_API_OK;
-}
-
-MSDLL rfnm_api_failcode device::get_tx_pump_stats(uint32_t *tx_pace_rolls, uint32_t *tx_arm_repairs) {
-    impl& m = *pimpl;
-    if (m.get(REQ_DEV_STATUS)) {
-        return RFNM_API_USB_FAIL;
-    }
-    if (tx_pace_rolls) {
-        *tx_pace_rolls = m.dev_status.tx_pace_rolls;
-    }
-    if (tx_arm_repairs) {
-        *tx_arm_repairs = m.dev_status.tx_arm_repairs;
     }
     return RFNM_API_OK;
 }
@@ -207,44 +87,7 @@ MSDLL rfnm_api_failcode device::apply_timing_settled(bool *settled) {
     return RFNM_API_OK;
 }
 
-MSDLL rfnm_api_failcode device::get_tx_ring_ptrs(uint32_t *read_ptr, uint32_t *head) {
-    impl& m = *pimpl;
-    rfnm_api_failcode r = m.get(REQ_DEV_STATUS);
-    if (r != RFNM_API_OK) {
-        return r;
-    }
-    std::lock_guard<std::mutex> lockGuard(m.s_dev_status_mutex);
-    if (read_ptr) {
-        *read_ptr = m.dev_status.tx_ring_read_ptr;
-    }
-    if (head) {
-        *head = m.dev_status.tx_ring_head;
-    }
-    return RFNM_API_OK;
-}
-
-MSDLL rfnm_api_failcode device::get_tx_last_late_cc(uint64_t *cc) {
-    impl& m = *pimpl;
-    if (m.get(REQ_DEV_STATUS)) {
-        return RFNM_API_USB_FAIL;
-    }
-    if (cc) {
-        *cc = m.dev_status.tx_last_late_usb_cc;
-    }
-    return RFNM_API_OK;
-}
-
-MSDLL void device::get_tx_headroom(int32_t *peak_abs, uint64_t *samples_scanned) {
-    impl& m = *pimpl;
-    if (peak_abs) {
-        *peak_abs = m.tx_peak_abs;
-    }
-    if (samples_scanned) {
-        *samples_scanned = m.tx_headroom_scanned;
-    }
-}
-
-// ---- v2 P2 surface (additive until the break wave deletes the getters these merge) ----
+// ---- the merged timing/health/contract surface ----
 
 MSDLL rfnm_api_failcode device::get_timing(enum stream_dir dir, struct timing *t) {
     impl& m = *pimpl;
@@ -266,7 +109,19 @@ MSDLL rfnm_api_failcode device::get_timing(enum stream_dir dir, struct timing *t
 }
 
 MSDLL rfnm_api_failcode device::clock_now(uint64_t *tick_ext) {
-    return get_phytimer(tick_ext);
+    impl& m = *pimpl;
+    if (m.get(REQ_DEV_STATUS)) {
+        return RFNM_API_USB_FAIL;
+    }
+    uint32_t raw = m.dev_status.phytimer_now;
+    if (m.ses.rx_ext[0].valid) {
+        // an RX stream is (or was) live: stay in the stamps' extended domain
+        *tick_ext = m.ses.rx_ext[0].extend_near(raw);
+        return RFNM_API_OK;
+    }
+    // stream-less: unwrap against this handle's previous read (exact within +-35 s)
+    *tick_ext = m.ses.ptmr_ext.step(raw);
+    return RFNM_API_OK;
 }
 
 MSDLL rfnm_api_failcode device::get_health(struct health *h) {
