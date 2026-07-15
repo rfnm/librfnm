@@ -78,3 +78,23 @@ void test_tick_ratio() {
     // r_shift 4: 8 ticks per sample
     CHECK_EQ(tick_ratio{ 4 }.samples_to_ticks(100), 800);
 }
+
+// Gated-delivery lead projection (r12p2 physics): feed_lead = delivered_lead * P/duty.
+void test_gated_lead() {
+    // the OAI r12p2 receipt numbers: 400/320 pattern, growth == exactly (P-duty)/duty = 0.25
+    CHECK_EQ(gated_feed_lead(35200000, 400, 320), 44000000);
+    CHECK_EQ(gated_feed_lead(35200000, 400, 320) - 35200000, 8800000);
+    // ratio is unitless: same result from tick-domain params (400/320 chunks * 768 ticks)
+    CHECK_EQ(gated_feed_lead(35200000, 307200, 245760), 44000000);
+    // wall-form identity: growth vs wall lead = (P-duty)/P; wall = delivered * P/duty
+    // -> for P=400 duty=320: wall 44.0M x 0.2 == delivered growth 8.8M
+    CHECK_EQ(44000000ull * (400 - 320) / 400, 8800000);
+    // no gating = identity; malformed (duty > period) never projects
+    CHECK_EQ(gated_feed_lead(12345, 400, 400), 12345);
+    CHECK_EQ(gated_feed_lead(12345, 400, 500), 12345);
+    CHECK_EQ(gated_feed_lead(12345, 400, 0), 12345);
+    // floor on non-divisible: 100 * 3/2 = 150; 101 * 3/2 = 151 (floor of 151.5)
+    CHECK_EQ(gated_feed_lead(101, 3, 2), 151);
+    // u128 path: no overflow near the top of u64
+    CHECK_EQ(gated_feed_lead(1ull << 62, 4, 2), 1ull << 63);
+}

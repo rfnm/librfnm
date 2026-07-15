@@ -96,13 +96,37 @@ MSDLL rfnm_api_failcode device::rx_tdd_configure(uint64_t period_ticks, uint64_t
         // TDD gating armed: the pipe is legitimately silent outside the RX duty window
         // (sticky - see session_state)
         m.ses.rx_scheduled_session = true;
+        // the projector's basis (tdd_project_lead): this session now knows the pattern
+        m.ses.tdd_period_ticks = period_ticks;
+        m.ses.tdd_duty_ticks = duty_ticks;
     }
     return ret;
 }
 
 MSDLL rfnm_api_failcode device::rx_tdd_stop() {
+    impl& m = *pimpl;
     struct rfnm_dev_tdd r_tdd = {0, 0};
-    return pimpl->ctrl_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
+    rfnm_api_failcode ret = m.ctrl_transfer(RFNM_SET_TDD, sizeof(struct rfnm_dev_tdd), (unsigned char *)&r_tdd, 50);
+    if (ret == RFNM_API_OK) {
+        m.ses.tdd_period_ticks = 0;
+        m.ses.tdd_duty_ticks = 0;
+    }
+    return ret;
+}
+
+MSDLL rfnm_api_failcode device::tdd_project_lead(uint64_t delivered_lead_samples, uint64_t *feed_lead_samples) {
+    impl& m = *pimpl;
+    uint64_t p = m.ses.tdd_period_ticks;
+    uint64_t d = m.ses.tdd_duty_ticks;
+    if (!p || !d) {
+        // no pattern known to THIS session (none armed, or armed by a predecessor) -
+        // refuse rather than return a silent identity a gated consumer would mis-stamp by
+        return RFNM_API_SCHED_NO_ANCHOR;
+    }
+    if (feed_lead_samples) {
+        *feed_lead_samples = gated_feed_lead(delivered_lead_samples, p, d);
+    }
+    return RFNM_API_OK;
 }
 
 MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tick) {

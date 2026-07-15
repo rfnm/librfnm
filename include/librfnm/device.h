@@ -240,6 +240,19 @@ namespace rfnm {
         // (the RX half-profile parks the PA - that is the TDD TX-desense fix).
         MSDLL rfnm_api_failcode rx_tdd_configure(uint64_t period_ticks, uint64_t duty_ticks);
         MSDLL rfnm_api_failcode rx_tdd_stop();
+        // Gated-delivery lead projection, under the pattern THIS session armed (params
+        // cached at rx_tdd_configure). The delivered clock (get_rx_delivered) advances
+        // only during open spans - duty/period of wall time - so content meant to AIR
+        // delivered_lead samples ahead of it must be written further ahead on the
+        // line-rate feed axis: feed_lead = delivered_lead * period/duty (exact, floor;
+        // 256-grid alignment stays the caller's). A stamp computed WITHOUT this
+        // projection lands short by (period-duty)/duty x lead at air time.
+        // AXIS RULE (the r12p2 overshoot receipt): delivered_lead must difference two
+        // DELIVERED-clock values - folding in a line-rate counter (a ring produce
+        // count, a wall clock) adds the session's whole accumulated deficit to the
+        // "lead" and the projection overshoots, growing with session age.
+        // No pattern known to this session -> SCHED_NO_ANCHOR, never a silent identity.
+        MSDLL rfnm_api_failcode tdd_project_lead(uint64_t delivered_lead_samples, uint64_t *feed_lead_samples);
         // ---- the client-requested stream anchor ----
         // Request the stream anchor (rx_t0 AND tx_t0 - the hardware mints ONE shared
         // timeline) at `tick`. The gates open at the earliest achievable tick
@@ -323,6 +336,9 @@ namespace rfnm {
         // frozen t0 + count*R construction): under any gated delivery that map
         // inherits every closed span forever. Local state, no control round trip.
         // DQBUF_NO_DATA until a valid-epoch packet landed.
+        // Under an armed TDD pattern this clock advances ONLY during open spans:
+        // leads measured against it must be projected onto the feed axis before
+        // writing ahead - see tdd_project_lead.
         MSDLL rfnm_api_failcode get_rx_delivered(uint64_t *delivered_samples,
                 uint64_t *tick_at_delivered, uint32_t adc_id = 0);
 

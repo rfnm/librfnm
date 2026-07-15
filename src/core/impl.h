@@ -192,6 +192,12 @@ namespace rfnm {
         // re-open the spurious-resync window this closes, and a scheduled-capable
         // client keeps real-wedge recovery through the counter check either way.
         std::atomic<bool> rx_scheduled_session{ false };
+        // The pattern THIS session armed (rx_tdd_configure params, ticks) - the basis
+        // for tdd_project_lead's period/duty ratio. Zero = no pattern known here
+        // (a STANDING pattern armed by a previous session is deliberately not
+        // guessed at - the projector refuses instead).
+        uint64_t tdd_period_ticks = 0;
+        uint64_t tdd_duty_ticks = 0;
         // bumped by rx_work_start when the workers (re)activate: tells the USB RX
         // engine to re-arm its dead-pipe watchdog baselines for the new session
         std::atomic<uint32_t> rx_work_generation{ 0 };
@@ -233,6 +239,8 @@ namespace rfnm {
             }
             ptmr_ext.reset();
             rx_scheduled_session = false;
+            tdd_period_ticks = 0;
+            tdd_duty_ticks = 0;
             rx_work_generation = 0;
             rx_pipe_dead_latch = false;
             last_set_res = {};

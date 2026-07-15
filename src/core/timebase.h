@@ -81,6 +81,19 @@ namespace rfnm {
         return 384ull << hw.clock.rx_dcs_div;
     }
 
+    // Gated-delivery lead projection (the r12p2 physics, owned once): under an armed
+    // TDD pattern the DELIVERED sample clock advances at duty/period of wall time, so
+    // content meant to AIR delivered_lead samples ahead of the delivered clock must
+    // be written period/duty ahead on the (line-rate) feed axis. Exact u128 mul-div,
+    // floor; period/duty are a unitless ratio (ticks or chunks alike). duty == period
+    // (no gating) is the identity by construction.
+    inline uint64_t gated_feed_lead(uint64_t delivered_lead, uint64_t period, uint64_t duty) {
+        if (!duty || duty >= period) {
+            return delivered_lead;
+        }
+        return (uint64_t)(((unsigned __int128)delivered_lead * period) / duty);
+    }
+
     // ONE owner for the stream-anchored 32->64 bit tick extension (the wrapping phy
     // timer counter, ~70 s period). advance() runs at the ordered dequeue point, where
     // stamps are monotonic per adc within an epoch: a backwards step of more than half
