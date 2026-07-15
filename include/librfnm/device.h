@@ -335,7 +335,7 @@ namespace rfnm {
         // with a misaligned tick is rejected SCHED_MISALIGNED. The kernel enforces
         // the scheduling window (min ~64 slots lead, max ~ring span) and zero-fills
         // any gap, so silence between scheduled bursts is automatic. Rejects are
-        // counted in tx_timing.timed_rejects - never silent, never mis-timed.
+        // counted in health.tx_timed_rejects - never silent, never mis-timed.
         MSDLL rfnm_api_failcode tx_buf_schedule(struct tx_buf *buf, uint64_t tick);
 
         MSDLL rfnm_api_failcode apply(uint16_t applies, bool confirm_execution = true, uint32_t timeout_us = 1000000);
