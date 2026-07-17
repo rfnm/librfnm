@@ -30,6 +30,24 @@
 #include "net_socket.h"
 #include "timebase.h"
 
+// TUP 3b (docs/tup-deletion-map-2026-07-17.md items 61/72): lib-internal marker for
+// schedule-positional bufs - the stamp is already final: the tx worker must skip the
+// anchor auto-stamp and feed_pos accounting (scheduled bursts are out-of-band vs the
+// sequential feed). STRIPPED at the wire copy; never leaves the process. Bit 30 sits
+// far above wire use (TIME_VALID/EOB/POS_VALID = bits 0-2, epoch byte = [15:8]).
+#define RFNM_TX_FLAG_LIB_PRESTAMPED	(1u << 30)
+// default OFF: today's TIME_VALID wire path stays byte-identical. Flip via env
+// RFNM_TXSCHED_POSITIONAL=1 (read once per process) - the kernel timed lane retires
+// only after the TA-sweep parity receipt on this lane.
+static inline bool rfnm_txsched_positional(void) {
+    static const bool en = [] {
+        const char *e = getenv("RFNM_TXSCHED_POSITIONAL");
+        return e && e[0] == '1';
+    }();
+    return en;
+}
+
+
 struct libusb_transfer;
 
 namespace rfnm {

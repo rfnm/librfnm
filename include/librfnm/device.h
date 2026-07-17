@@ -301,6 +301,13 @@ namespace rfnm {
         // must NOT open an RX stream just to read the clock (an RX apply on a TX
         // board steals the shared FE port).
         MSDLL rfnm_api_failcode clock_now(uint64_t *tick_ext);
+        // ---- time unification, one absolute anchor (docs/time-unification-plan-2026-07-17.md) ----
+        // The LA9310 phytimer made absolute: (wrap_count << 32) | hw_low32, kernel-owned
+        // extension, FRESH AT REQUEST TIME (one status round trip - never a cached copy).
+        // Ticks compare only within one phy_gen; a gen move means every outstanding time
+        // promise is void (TIME_RESET) - reopen and re-read (gen, now64).
+        MSDLL rfnm_api_failcode get_phytimer64(uint64_t *tick64);
+        MSDLL rfnm_api_failcode get_phy_gen(uint32_t *gen);
         // ONE health snapshot (one status refresh + the host-local counters).
         MSDLL rfnm_api_failcode get_health(struct health *h);
         // The device-published contract constants (one status refresh).

@@ -124,6 +124,34 @@ MSDLL rfnm_api_failcode device::clock_now(uint64_t *tick_ext) {
     return RFNM_API_OK;
 }
 
+MSDLL rfnm_api_failcode device::get_phytimer64(uint64_t *tick64) {
+    // time unification: the kernel samples its 64-bit extension AT REQUEST TIME and
+    // publishes it in dev_status - one refresh here, never a cached copy
+    impl& m = *pimpl;
+    rfnm_api_failcode r = m.get(REQ_DEV_STATUS);
+    if (r != RFNM_API_OK) {
+        return r;
+    }
+    std::lock_guard<std::mutex> lockGuard(m.s_dev_status_mutex);
+    if (tick64) {
+        *tick64 = m.dev_status.phytimer_now64;
+    }
+    return RFNM_API_OK;
+}
+
+MSDLL rfnm_api_failcode device::get_phy_gen(uint32_t *gen) {
+    impl& m = *pimpl;
+    rfnm_api_failcode r = m.get(REQ_DEV_STATUS);
+    if (r != RFNM_API_OK) {
+        return r;
+    }
+    std::lock_guard<std::mutex> lockGuard(m.s_dev_status_mutex);
+    if (gen) {
+        *gen = m.dev_status.phy_gen;
+    }
+    return RFNM_API_OK;
+}
+
 MSDLL rfnm_api_failcode device::get_health(struct health *h) {
     impl& m = *pimpl;
     rfnm_api_failcode r = m.get(REQ_DEV_STATUS);

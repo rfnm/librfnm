@@ -131,6 +131,7 @@ MSDLL rfnm_api_failcode device::tdd_project_lead(uint64_t delivered_lead_samples
 
 MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tick) {
     impl& m = *pimpl;
+    uint32_t caller_flags = buf->tx_flags;
     if (!m.dev_status.tx_epoch) {
         return RFNM_API_SCHED_NO_ANCHOR;
     }
@@ -153,6 +154,23 @@ MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tic
         }
         buf->elem_cnt = padded;
         tick = plan.gate_tick;
+    }
+    if (rfnm_txsched_positional()) {
+        // TUP 3b stamped-positional lane (pad above is SHARED - parity is structural):
+        // POS_VALID at the slot-aligned absolute tick; the kernel's pos gap-scrub gives
+        // the inter-burst silence and its judge enforces the lead. Lib pre-check keeps
+        // the failure loud and local; one fresh status per call (per-burst cadence).
+        get(REQ_DEV_STATUS);
+        uint64_t now64 = m.dev_status.phytimer_now64;
+        uint32_t lead_ticks = m.dev_status.tx_feed_min_lead_ticks ?
+                m.dev_status.tx_feed_min_lead_ticks : m.dev_status.tx_feed_lead_ticks;
+        if (now64 && tick < now64 + lead_ticks) {
+            return RFNM_API_SCHED_LATE;     // now64==0 = pre-step-1 kernel: its judge decides
+        }
+        buf->phytimer = (uint32_t)tick;
+        buf->tx_flags = RFNM_TX_FLAG_POS_VALID | RFNM_TX_FLAG_LIB_PRESTAMPED |
+                ((m.dev_status.tx_epoch & 0xFF) << 8) | (caller_flags & RFNM_TX_FLAG_EOB);
+        return RFNM_API_OK;
     }
     buf->phytimer = (uint32_t)tick;
     buf->tx_flags = RFNM_TX_FLAG_TIME_VALID | ((m.dev_status.tx_epoch & 0xFF) << 8);

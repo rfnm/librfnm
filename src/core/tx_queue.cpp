@@ -8,6 +8,14 @@
 using namespace rfnm;
 
 rfnm_api_failcode device::impl::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us) {
+    // time unification (v5-twin parity): the first-stamp anchor latch below pins
+    // dev_status.tx_t0 - refresh before locking so a seek-less session latches a
+    // fresh observation, not the poller's cache (a stale now64 would anchor the
+    // whole continuous stream behind the device's now64 judge). Unlocked peek =
+    // heuristic (a miss falls back to the cache); fires at most once per session.
+    if (!ses.tx_anchor_valid && !(buf->tx_flags & (RFNM_TX_FLAG_TIME_VALID | RFNM_TX_FLAG_LIB_PRESTAMPED))) {
+        get(REQ_DEV_STATUS);
+    }
     // elem_cnt selects the packet size: 0 = full, else a multiple of 256 samples (the
     // base-buf granularity the device consumes)
     if (buf->elem_cnt && (buf->elem_cnt % (LA_TX_BASE_BUFSIZE_12 / 3) || buf->elem_cnt > RFNM_USB_TX_PACKET_ELEM_CNT)) {
@@ -56,7 +64,7 @@ rfnm_api_failcode device::impl::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
     // epoch rides flags[15:8]: the device drops stamps minted against a torn-down
     // anchor. The anchor is latched ONCE (at seek, or at the first stamped packet)
     // and never re-read from the live dev_status cache here - see session_state.
-    if (!(buf->tx_flags & RFNM_TX_FLAG_TIME_VALID) && ses.pos_intent &&
+    if (!(buf->tx_flags & (RFNM_TX_FLAG_TIME_VALID | RFNM_TX_FLAG_LIB_PRESTAMPED)) && ses.pos_intent &&
             !ses.tx_anchor_valid && !dev_status.tx_epoch) {
         // the session declared positional intent (it seeked) and this write cannot
         // be stamped - refuse it, never silently demote to free-run (a demoted burst
@@ -65,7 +73,7 @@ rfnm_api_failcode device::impl::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
         tx_s.usb_cc--;
         return RFNM_API_TX_NOT_ANCHORED;
     }
-    if (!(buf->tx_flags & RFNM_TX_FLAG_TIME_VALID) &&
+    if (!(buf->tx_flags & (RFNM_TX_FLAG_TIME_VALID | RFNM_TX_FLAG_LIB_PRESTAMPED)) &&
             (ses.tx_anchor_valid || dev_status.tx_epoch)) {
         uint32_t samples = buf->elem_cnt ? buf->elem_cnt : RFNM_USB_TX_PACKET_ELEM_CNT;
         if (!ses.tx_anchor_valid) {
@@ -73,6 +81,22 @@ rfnm_api_failcode device::impl::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us)
             ses.tx_anchor_epoch = (uint8_t)(dev_status.tx_epoch & 0xFF);
             ses.tx_anchor_r_shift = (uint8_t)dev_status.tx_r_shift;
             ses.tx_anchor_valid = true;
+            // TUP virgin auto-seek (see the v5 twin + the plan doc): a seek-less
+            // continuous client's feed_pos 0 = the session-start tick, already PAST
+            // under the one-lane now64 judge - every packet would late-drop and the
+            // client airs silence. Anchor the virgin feed at fresh now + published
+            // lead; continuous clients then stream exactly as before.
+            if (!ses.pos_intent && ses.feed_pos == 0) {
+                uint64_t lead = dev_status.tx_feed_min_lead_ticks ?
+                        dev_status.tx_feed_min_lead_ticks : dev_status.tx_feed_lead_ticks;
+                lead *= 2;	// margin (v5-twin parity, receipted u6): the status-read
+                		// staleness + in-flight time eat into a bare min-lead anchor
+                uint32_t ahead = (uint32_t)(dev_status.phytimer_now64 ?
+                        dev_status.phytimer_now64 : dev_status.phytimer_now)
+                        + (uint32_t)lead - ses.tx_anchor_t0;
+                // samples = ticks*2 / 2^r_shift (R = 2^shift/2 ticks per sample)
+                ses.feed_pos = ((((uint64_t)ahead << 1) >> ses.tx_anchor_r_shift) / 256 + 1) * 256;
+            }
         }
         buf->phytimer = ses.tx_anchor_t0 +
                 (uint32_t)tick_ratio{ ses.tx_anchor_r_shift }.samples_to_ticks(ses.feed_pos);
@@ -132,6 +156,12 @@ rfnm_api_failcode device::impl::tx_feed_seek_to(uint64_t abs_samples) {
     if (abs_samples % 256) {
         return RFNM_API_NOT_SUPPORTED;
     }
+    // time unification (v5-twin parity): the latch below pins dev_status.tx_t0 -
+    // refresh FIRST so the pin is a fresh observation, not the poller's cache
+    // (receipted 07-17 as a constant 32 ms stamp skew). Strictly before the locks:
+    // get() takes s_dev_status_mutex internally. Best-effort - a failed refresh
+    // falls back to the cache as before.
+    get(REQ_DEV_STATUS);
     std::lock_guard<std::mutex> lockGuard0(s_dev_status_mutex);
     std::lock_guard<std::mutex> lockGuard(tx_s.in_mutex);
     if (abs_samples < ses.feed_pos) {

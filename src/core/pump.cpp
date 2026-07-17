@@ -434,7 +434,7 @@ void device::impl::worker(size_t index) {
                     pack_cs16_to_12((uint8_t*)c.ltxbuf->buf, buf->buf, tx_elems);
                     c.ltxbuf->fmt = RFNM_PACKET_FMT_PACKED12;
                 }
-                c.ltxbuf->tx_flags = buf->tx_flags;
+                c.ltxbuf->tx_flags = buf->tx_flags & ~RFNM_TX_FLAG_LIB_PRESTAMPED;  // lib-internal bit never leaves the process
                 c.ltxbuf->dac_id = buf->dac_id;
                 c.ltxbuf->usb_cc = buf->usb_cc;
                 c.ltxbuf->phytimer = buf->phytimer;
