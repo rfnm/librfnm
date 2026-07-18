@@ -173,6 +173,10 @@ MSDLL rfnm_api_failcode device::tx_buf_schedule(struct tx_buf *buf, uint64_t tic
         return RFNM_API_OK;
     }
     buf->phytimer = (uint32_t)tick;
-    buf->tx_flags = RFNM_TX_FLAG_TIME_VALID | ((m.dev_status.tx_epoch & 0xFF) << 8);
+    // EOB survives like the POS lane already does (usbmon receipt 07-18: this line
+    // clobbered it - flags always 0x4001 on the wire - so the gate-close verb was
+    // dead on arrival in the lib; the windowed substrate needs it truthful)
+    buf->tx_flags = RFNM_TX_FLAG_TIME_VALID | ((m.dev_status.tx_epoch & 0xFF) << 8) |
+            (caller_flags & RFNM_TX_FLAG_EOB);
     return RFNM_API_OK;
 }
