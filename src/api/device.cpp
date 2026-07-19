@@ -174,11 +174,23 @@ rfnm_api_failcode device::impl::get(enum req_type type) {
 
     if (type & REQ_RX) {
         struct rfnm_dev_rx_ch_list r_chlist;
+        enum rfnm_agc_type agc_own[sizeof(rx.ch) / sizeof(rx.ch[0])];
+        size_t i;
 
         if (ctrl_transfer(RFNM_GET_RX_CH_LIST, sizeof(struct rfnm_dev_rx_ch_list), (unsigned char*)&r_chlist, 50) != RFNM_API_OK) {
             return RFNM_API_USB_FAIL;
         }
+        // agc designates an autonomous kernel servo, so it is session-owned, never
+        // inherited: keep this session's value (OFF until set_rx_channel_agc) instead
+        // of the readback, or a stale servo left enabled by a previous client rides
+        // the next manual-gain session's apply and steps gain mid-measurement.
+        for (i = 0; i < sizeof(agc_own) / sizeof(agc_own[0]); i++) {
+            agc_own[i] = rx.ch[i].agc;
+        }
         memcpy(&rx, &r_chlist, sizeof(struct rfnm_dev_rx_ch_list));
+        for (i = 0; i < sizeof(agc_own) / sizeof(agc_own[0]); i++) {
+            rx.ch[i].agc = agc_own[i];
+        }
     }
 
     if (type & REQ_DEV_STATUS) {
