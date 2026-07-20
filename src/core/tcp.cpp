@@ -10,6 +10,7 @@
 
 #ifdef _WIN32
 #include <winsock2.h>
+#include <ws2tcpip.h>	// inet_ntop/inet_pton/INET_ADDRSTRLEN live here on Windows
 #include <iphlpapi.h>
 #pragma comment(lib, "Iphlpapi.lib")
 #pragma comment(lib, "Ws2_32.lib")
