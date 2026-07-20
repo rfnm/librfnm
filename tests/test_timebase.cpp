@@ -11,6 +11,18 @@ static timebase tb_6144() { return timebase{ 61440000ull }; }
 static timebase tb_100m() { return timebase{ 100000000ull }; }
 
 void test_timebase() {
+    // muldiv_u64 pins: the portable 128-bit (a*b+add)/div under every conversion.
+    // The >64-bit-product cases execute the MSVC intrinsic/fallback paths on Windows
+    // CI (this exact helper replaced __int128, which MSVC lacks - C4235 receipt).
+    CHECK_EQ(muldiv_u64(6, 7, 0, 2), 21ull);
+    CHECK_EQ(muldiv_u64(10, 10, 5, 10), 10ull);                          // rounding add
+    CHECK_EQ(muldiv_u64(0xffffffffffffffffull, 0xffffffffffffffffull, 0,
+                        0xffffffffffffffffull), 0xffffffffffffffffull);  // max*max/max, hi != 0
+    CHECK_EQ(muldiv_u64(0x123456789abcdefull, 1000000000ull, 0,
+                        61440000ull), 1334399889591258056ull);           // ticks_to_ns shape, hi != 0
+    CHECK_EQ(muldiv_u64(1, 1, 0xfffffffffffffffeull, 0xffffffffffffffffull), 1ull);  // add carries to quotient
+    CHECK_EQ(muldiv_u64(2, 0x8000000000000000ull, 0, 2), 0x8000000000000000ull);     // product exactly 2^64
+
     // hwinfo is the ONLY tick_hz source: dcs_clk/2, zero-until-published
     struct rfnm_dev_hwinfo hw = {};
     CHECK(!timebase::from_hwinfo(hw).valid());

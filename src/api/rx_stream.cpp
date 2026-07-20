@@ -1,4 +1,5 @@
 #include <librfnm/rx_stream.h>
+#include "../core/timebase.h"
 #include <librfnm/rfnm_fw_api.h>
 #include <spdlog/spdlog.h>
 
@@ -59,7 +60,7 @@ uint64_t rx_stream::ticks_of_samples(uint64_t samples) {
     if (!timing_valid) {
         return samples;
     }
-    return (uint64_t)(((unsigned __int128)samples * timing.r_num) / timing.r_den);
+    return muldiv_u64(samples, timing.r_num, 0, timing.r_den);
 }
 
 // extended tick of the next unconsumed sample in this channel's pending buffer
@@ -108,7 +109,7 @@ rfnm_api_failcode rx_stream::align_channels(bool initial) {
             if (!behind_ticks) {
                 continue;
             }
-            uint64_t behind_samples = (uint64_t)(((unsigned __int128)behind_ticks * timing.r_den) / timing.r_num);
+            uint64_t behind_samples = muldiv_u64(behind_ticks, timing.r_den, 0, timing.r_num);
             if (!behind_samples) {
                 continue;
             }
@@ -128,7 +129,7 @@ rfnm_api_failcode rx_stream::align_channels(bool initial) {
                 t0_ext = anchor;
                 pos_samples = 0;
             } else if (anchor >= t0_ext) {
-                pos_samples = (uint64_t)(((unsigned __int128)(anchor - t0_ext) * timing.r_den) / timing.r_num);
+                pos_samples = muldiv_u64(anchor - t0_ext, timing.r_den, 0, timing.r_num);
             } else {
                 // stamp regression across the resync (epoch flip re-based the extension):
                 // keep the timeline monotonic by re-basing t0 so pos continues in place
@@ -177,7 +178,7 @@ MSDLL rfnm_api_failcode rx_stream::align_to_tick(uint64_t tick, uint32_t timeout
                 return RFNM_API_SCHED_LATE;     // target already consumed: cannot rewind
             }
             uint64_t behind_ticks = tick - st;
-            uint64_t behind_samples = (uint64_t)(((unsigned __int128)behind_ticks * timing.r_den) / timing.r_num);
+            uint64_t behind_samples = muldiv_u64(behind_ticks, timing.r_den, 0, timing.r_num);
             if (!behind_samples) {
                 return RFNM_API_SCHED_MISALIGNED;   // tick falls between two samples
             }
@@ -195,7 +196,7 @@ MSDLL rfnm_api_failcode rx_stream::align_to_tick(uint64_t tick, uint32_t timeout
             // jump the delivery timeline truthfully to the requested point (same
             // monotonicity rules as the gap resync above)
             if (tick >= t0_ext) {
-                pos_samples = (uint64_t)(((unsigned __int128)(tick - t0_ext) * timing.r_den) / timing.r_num);
+                pos_samples = muldiv_u64(tick - t0_ext, timing.r_den, 0, timing.r_num);
             } else {
                 t0_ext = tick - ticks_of_samples(pos_samples);
             }

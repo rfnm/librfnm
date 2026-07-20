@@ -7,7 +7,58 @@
 #include <cstdint>
 #include <librfnm/rfnm_fw_api.h>
 
+#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64)
+#include <intrin.h>
+#endif
+
 namespace rfnm {
+
+    // (a * b + add) / div with an exact 128-bit intermediate. GCC/Clang lower this to
+    // unsigned __int128 (MSVC has no 128-bit integer type - CI receipt: C4235 on every
+    // conversion below). MSVC x64 uses the mul/div intrinsic pair; other MSVC targets
+    // take the restoring-division fallback. Callers guarantee the true quotient fits
+    // 64 bits; the MSVC paths saturate instead of faulting if one ever does not.
+    static inline uint64_t muldiv_u64(uint64_t a, uint64_t b, uint64_t add, uint64_t div) {
+#if defined(_MSC_VER) && !defined(__clang__)
+        uint64_t hi, lo;
+#if defined(_M_X64)
+        lo = _umul128(a, b, &hi);
+#else
+        uint64_t a_lo = a & 0xffffffffull, a_hi = a >> 32;
+        uint64_t b_lo = b & 0xffffffffull, b_hi = b >> 32;
+        uint64_t p0 = a_lo * b_lo, p1 = a_lo * b_hi, p2 = a_hi * b_lo, p3 = a_hi * b_hi;
+        lo = p0 + (p1 << 32);
+        uint64_t c1 = lo < p0;
+        uint64_t lo2 = lo + (p2 << 32);
+        uint64_t c2 = lo2 < lo;
+        lo = lo2;
+        hi = p3 + (p1 >> 32) + (p2 >> 32) + c1 + c2;
+#endif
+        uint64_t lo3 = lo + add;
+        hi += lo3 < lo;
+        lo = lo3;
+        if (hi >= div) {
+            return UINT64_MAX;
+        }
+#if defined(_M_X64)
+        uint64_t rem;
+        return _udiv128(hi, lo, div, &rem);
+#else
+        uint64_t q = 0, r = hi;
+        for (int i = 63; i >= 0; i--) {
+            uint64_t top = r >> 63;
+            r = (r << 1) | ((lo >> i) & 1);
+            if (top || r >= div) {
+                r -= div;
+                q |= 1ull << i;
+            }
+        }
+        return q;
+#endif
+#else
+        return (uint64_t)(((unsigned __int128)a * b + add) / div);
+#endif
+    }
 
     // The phy timer tick rate is a DEVICE PROPERTY: dcs_clk/2, plan-dependent (61.44 MHz
     // on the 122.88 plan, 100 MHz on the 50M/DCS-200 plan), published in hwinfo.
@@ -29,20 +80,20 @@ namespace rfnm {
             if (!tick_hz) {
                 return 0;
             }
-            return (uint64_t)(((unsigned __int128)ticks * 1000000000ull + tick_hz / 2) / tick_hz);
+            return muldiv_u64(ticks, 1000000000ull, tick_hz / 2, tick_hz);
         }
 
         uint64_t ns_to_ticks(uint64_t ns) const {
             if (!tick_hz) {
                 return 0;
             }
-            return (uint64_t)(((unsigned __int128)ns * tick_hz + 500000000ull) / 1000000000ull);
+            return muldiv_u64(ns, tick_hz, 500000000ull, 1000000000ull);
         }
 
         // whole microseconds -> ticks, floor semantics: duration FLOORS (e.g. the TDD v2
         // 600 us span minimum) are expressed in us and evaluated against this plan's rate
         uint64_t us_to_ticks_floor(uint64_t us) const {
-            return (uint64_t)(((unsigned __int128)us * tick_hz) / 1000000ull);
+            return muldiv_u64(us, tick_hz, 0, 1000000ull);
         }
     };
 
@@ -91,7 +142,7 @@ namespace rfnm {
         if (!duty || duty >= period) {
             return delivered_lead;
         }
-        return (uint64_t)(((unsigned __int128)delivered_lead * period) / duty);
+        return muldiv_u64(delivered_lead, period, 0, duty);
     }
 
     // ONE owner for the stream-anchored 32->64 bit tick extension (the wrapping phy
