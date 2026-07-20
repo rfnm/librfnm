@@ -109,6 +109,12 @@ function(configure_rfnm_target target)
     # Include the include folder
     target_include_directories(${target} PUBLIC "include/")
 
+    # windows.h (via winsock2/iphlpapi) defines min/max macros that break std::min/
+    # std::max in any TU that sees them; lean headers also cut the build time
+    if (WIN32)
+        target_compile_definitions(${target} PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif ()
+
     # Link to spdlog
     target_link_libraries(${target} PRIVATE spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32 iphlpapi>)
 

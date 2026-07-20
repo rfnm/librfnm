@@ -31,7 +31,14 @@ jobs:
 
         - name: Build
           working-directory: ${{runner.workspace}}/build
-          run: cmake --build . --config Release --verbose
+          # compiler errors are surfaced as ::error:: annotations so failures are
+          # diagnosable from the public API (raw job logs need repo admin)
+          run: |
+            cmake --build . --config Release --verbose 2>&1 | Tee-Object build.log
+            if ($LASTEXITCODE -ne 0) {
+              Get-Content build.log | Select-String -Pattern "(error [A-Z]+[0-9]+|CMake Error)" | Select-Object -First 20 | ForEach-Object { Write-Output "::error::$($_.Line)" }
+              exit 1
+            }
 
         - name: Unit tests
           working-directory: ${{runner.workspace}}/build
