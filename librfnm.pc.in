@@ -6,5 +6,6 @@ includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
 Name: LibRFNM
 Description: Hardware Driver for the RFNM SDR
 Version: @CMAKE_PROJECT_VERSION@
+Requires.private: libusb-1.0
 Cflags: -I${includedir}/
 Libs: -L${libdir} -lrfnm

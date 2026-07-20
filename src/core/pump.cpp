@@ -299,6 +299,9 @@ void device::impl::worker(size_t index) {
     if (transport_status.transport == TRANSPORT_LOCAL) {
         c.data_ep_fp = open("/dev/rfnm_data_ep", O_RDWR);
         if (c.data_ep_fp < 0) {
+            spdlog::error("worker {}: cannot open /dev/rfnm_data_ep - local transport dead", index);
+            delete[] c.lrxbuf_heap;
+            delete[] c.ltxbuf_heap;
             return;
         }
     }

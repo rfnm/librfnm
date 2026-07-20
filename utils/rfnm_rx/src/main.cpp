@@ -11,7 +11,7 @@
 
 std::atomic<bool> shutdown_req(false);
 
-void signal_handler(int signum) {
+void signal_handler(int) {
     shutdown_req = true;
 }
 
@@ -37,9 +37,7 @@ int main() {
     lrfnm->set_rx_channel_freq(rx_ch.id, RFNM_MHZ_TO_HZ(3050));
 
     //lrfnm->apply(tx_ch.apply);
-    lrfnm->apply(rx_ch.apply);
-
-    if (lret = lrfnm->apply(rx_ch.apply)) {
+    if ((lret = lrfnm->apply(rx_ch.apply))) {
         printf("Error applying RX channel configuration: %s (code: %d)\n", rfnm::device::failcode_to_string(lret), lret);
         return -1;
     }
@@ -48,11 +46,7 @@ int main() {
     uint8_t bytes_per_ele;
 
     lrfnm->set_stream_format(rfnm::STREAM_FORMAT_CS16, &inbufsize, &bytes_per_ele);
-    printf("bufsize: %zd, %d bytes per element\n", inbufsize, bytes_per_ele);
-
-    std::queue<struct rfnm::tx_buf*> ltxqueue;
-
-    uint8_t* s[NBUF];
+    printf("bufsize: %zu, %d bytes per element\n", inbufsize, bytes_per_ele);
 
     struct rfnm::rx_buf rxbuf[NBUF];
 
@@ -69,8 +63,6 @@ int main() {
 
     while (!shutdown_req) {
         struct rfnm::rx_buf* lrxbuf;
-        struct rfnm::tx_buf* ltxbuf;
-        rfnm_api_failcode err;
         int dequed_cycle = 0;
 
         while (!lrfnm->rx_dqbuf(&lrxbuf, rx_ch.mask, 0)) {

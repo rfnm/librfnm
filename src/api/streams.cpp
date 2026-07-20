@@ -84,6 +84,9 @@ MSDLL rfnm_api_failcode device::rx_work_stop() {
 }
 
 MSDLL rfnm_api_failcode device::tx_work_start(enum tx_latency_policy policy) {
+    // the latency policy is honored by the tx_stream pacing layer, not by the raw
+    // worker start; the parameter stays for API stability (v4 surface)
+    (void)policy;
     impl& m = *pimpl;
     rfnm_api_failcode ret = RFNM_API_OK;
 

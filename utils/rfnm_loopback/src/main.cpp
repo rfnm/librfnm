@@ -11,7 +11,7 @@
 
 std::atomic<bool> shutdown_req(false);
 
-void signal_handler(int signum) {
+void signal_handler(int) {
     shutdown_req = true;
 }
 
@@ -37,7 +37,7 @@ int main() {
     lrfnm->set_tx_channel_freq(tx_ch.id, RFNM_MHZ_TO_HZ(3050));
     lrfnm->set_rx_channel_freq(rx_ch.id, RFNM_MHZ_TO_HZ(3050));
 
-    if (lret = lrfnm->apply(rx_ch.apply | tx_ch.apply)) {
+    if ((lret = lrfnm->apply(rx_ch.apply | tx_ch.apply))) {
         printf("Error applying TX/RX channel configuration: %s (code: %d)\n", rfnm::device::failcode_to_string(lret), lret);
         return -1;
     }
@@ -46,7 +46,7 @@ int main() {
     uint8_t bytes_per_ele;
 
     lrfnm->set_stream_format(rfnm::STREAM_FORMAT_CS16, &inbufsize, &bytes_per_ele);
-    printf("bufsize: %zd, %d bytes per element\n", inbufsize, bytes_per_ele);
+    printf("bufsize: %zu, %d bytes per element\n", inbufsize, bytes_per_ele);
 
     std::queue<struct rfnm::tx_buf*> ltxqueue;
 
@@ -102,7 +102,6 @@ int main() {
         auto us_int = std::chrono::duration_cast<std::chrono::microseconds>(tnow - tstart);
         if (us_int.count() > 1000000) {
             float sps = (inbufsize * dequed / 4);
-            int qout = tx_queue.size();
             printf("Count: %d Looped: %.2f Msps %.2f Mbps\n", dequed, sps / 1000000, (sps * 24) / 1000000);
             dequed = 0;
             tstart = tnow;

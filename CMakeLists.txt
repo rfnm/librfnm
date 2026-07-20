@@ -28,8 +28,6 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU"
 endif()
 
 
-set(ENABLE_ADDRESS_SANITIZER OFF)
-
 # List all source files
 file(GLOB_RECURSE SRC "src/*.cpp")
 
@@ -45,8 +43,7 @@ if(BUILD_RFNM_LOCAL_TRANSPORT)
   set_source_files_properties(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/core/pack.cpp"
     PROPERTIES
-      COMPILE_FLAGS "-std=c99 -mcpu=cortex-a53 -Wall -Wextra -O3 \
-                      -fopenmp-simd -fdump-tree-vect-details -fopt-info-note-missed"
+      COMPILE_FLAGS "-mcpu=cortex-a53 -O3 -fopenmp-simd"
   )
 endif()
 
@@ -109,12 +106,6 @@ function(configure_rfnm_target target)
     # Set C++ standard to C++17
     target_compile_features(${target} PUBLIC cxx_std_17)
 
-    if(ENABLE_ADDRESS_SANITIZER)
-        message(STATUS "Address Sanitizer enabled for target ${target}")
-        target_compile_options(${target} PRIVATE -fsanitize=address)
-        target_link_options(${target} PRIVATE -fsanitize=address -static-libasan)
-    endif()
-
     # Include the include folder
     target_include_directories(${target} PUBLIC "include/")
 
@@ -133,9 +124,12 @@ configure_rfnm_target(rfnm)
 
 
 
-# On Windows, the install prefix should default to "C:/Program Files/RFNM" (TODO: Have it default instead of override)
+# On Windows, default the install prefix to "C:/Program Files/RFNM" - but only when
+# the user did not pass their own -DCMAKE_INSTALL_PREFIX (the old code overrode it)
 if (MSVC)
-    set(CMAKE_INSTALL_PREFIX "C:/Program Files/RFNM/")
+    if (CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+        set(CMAKE_INSTALL_PREFIX "C:/Program Files/RFNM/" CACHE PATH "Install prefix" FORCE)
+    endif ()
     set(CMAKE_INSTALL_BINDIR "bin")
     set(CMAKE_INSTALL_LIBDIR "lib")
     set(CMAKE_INSTALL_INCLUDEDIR "include")

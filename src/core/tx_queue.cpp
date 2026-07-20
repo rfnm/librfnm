@@ -8,6 +8,10 @@
 using namespace rfnm;
 
 rfnm_api_failcode device::impl::tx_qbuf(struct tx_buf* buf, uint32_t timeout_us) {
+    // tx_qbuf never blocks: the signed-window judge below either admits the packet or
+    // returns MIN_QBUF_QUEUE_FULL for the caller to retry. The timeout parameter stays
+    // for API stability (v4 surface) and as the reserved slot for a blocking variant.
+    (void)timeout_us;
     // time unification (v5-twin parity): the first-stamp anchor latch below pins
     // dev_status.tx_t0 - refresh before locking so a seek-less session latches a
     // fresh observation, not the poller's cache (a stale now64 would anchor the

@@ -12,7 +12,7 @@
 
 std::atomic<bool> shutdown_req(false);
 
-void signal_handler(int signum) {
+void signal_handler(int) {
     shutdown_req = true;
 }
 
@@ -33,7 +33,7 @@ int main() {
 
     lrfnm->set_tx_channel_freq(tx_ch.id, RFNM_MHZ_TO_HZ(3050));
 
-    if (lret = lrfnm->apply(tx_ch.apply)) {
+    if ((lret = lrfnm->apply(tx_ch.apply))) {
         printf("Error applying TX channel configuration: %s (code: %d)\n", rfnm::device::failcode_to_string(lret), lret);
         return -1;
     }
@@ -41,7 +41,7 @@ int main() {
     uint8_t bytes_per_ele;
 
     lrfnm->set_stream_format(rfnm::STREAM_FORMAT_CS16, &inbufsize, &bytes_per_ele);
-    printf("bufsize: %zd, %d bytes per element\n", inbufsize, bytes_per_ele);
+    printf("bufsize: %zu, %d bytes per element\n", inbufsize, bytes_per_ele);
     
     std::queue<struct rfnm::tx_buf*> ltxqueue;
 
@@ -58,28 +58,15 @@ int main() {
 
     for (int i = 0; i < NBUF; i++) {
         txbuf[i].buf = (uint8_t*)malloc(inbufsize);
+        if (!txbuf[i].buf) {
+            printf("Out of memory allocating TX buffers\n");
+            return -1;
+        }
         s[i] = txbuf[i].buf;
 
-#if 0
-        
         d = (uint16_t*)txbuf[i].buf;
-        for (int q = 0; q + 1 < (inbufsize / 2); q += 2) {
-            // Generate two uniform random numbers in (0,1]
-            double u1 = ((double)rand() + 1.0) / ((double)RAND_MAX + 1.0);
-            double u2 = ((double)rand() + 1.0) / ((double)RAND_MAX + 1.0);
-            // Box–Muller transform to obtain two independent Gaussian variables
-            double z0 = sqrt(-2.0 * log(u1)) * cos(2 * 3.14159265358979323846 * u2);
-            double z1 = sqrt(-2.0 * log(u1)) * sin(2 * 3.14159265358979323846 * u2);
-            double amplitude = 0.5; // adjust amplitude as needed
-
-            d[q]   = (int16_t)(0x8000 * z0 * amplitude);
-            d[q+1] = (int16_t)(0x8000 * z1 * amplitude);
-        }
-
-#else
-        d = (uint16_t*)txbuf[i].buf;
-        if (i < NBUF) {
-            for (int q = 0; q + 1 < (inbufsize / 2); q += 2) {
+        {
+            for (size_t q = 0; q + 1 < (inbufsize / 2); q += 2) {
                 d[q] = (int16_t) int(0x8000 * sin(t) * 0.5);
                 d[q+1] = (int16_t) int(0x8000 * cos(t) * (0.2 + progressive));
                 if(progressive_direction) {
@@ -98,7 +85,6 @@ int main() {
                 }
             }
         }
-#endif
         ltxqueue.push(&txbuf[i]);
     }
 
@@ -109,7 +95,6 @@ int main() {
 
     while (!shutdown_req) {
         struct rfnm::tx_buf* ltxbuf;
-        rfnm_api_failcode err;
 
         while (ltxqueue.size()) {
             ltxbuf = ltxqueue.front();

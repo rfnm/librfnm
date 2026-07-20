@@ -61,7 +61,7 @@ int main() {
             }
 
             // Show motherboard information
-            printf("* Protocol Version: %d\n", info.protocol_version);
+            printf("* Protocol Version: %u\n", info.protocol_version);
             dumpHwInfo(info.motherboard, false);
 
             // Show info for all daughterboards
