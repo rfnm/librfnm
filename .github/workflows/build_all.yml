@@ -22,9 +22,9 @@ jobs:
         - name: Create Build Environment
           run: cmake -E make_directory ${{runner.workspace}}/build
 
-        - name: Install dependencies
-          run: vcpkg install libusb:x64-windows spdlog:x64-windows
-
+        # Dependencies come from vcpkg.json (manifest mode): the toolchain file
+        # installs them at configure time. A classic `vcpkg install pkg:triplet`
+        # is refused when a manifest is present in the working tree.
         - name: Prepare CMake
           working-directory: ${{runner.workspace}}/build
           run: cmake "$Env:GITHUB_WORKSPACE" "-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake" "-DBUILD_RFNM_TESTS=ON"
