@@ -6,16 +6,22 @@
 
 #include "constants.h"
 #include "rfnm_fw_api.h"
+#include "version.h"
 
-#if defined(__GNUC__)
+// API export decoration. The library is built with -fvisibility=hidden on GCC/Clang,
+// so every public entry point must carry the default-visibility attribute. On MSVC the
+// build relies on CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS (function-only API, no exported
+// data), so the macro stays empty there — a consumer-side __declspec(dllexport) here
+// would mis-declare the import direction.
+#if defined(__GNUC__) || defined(__clang__)
+#define MSDLL __attribute__((visibility("default")))
+#else
 #define MSDLL
-#elif defined(_MSC_VER)
-#define MSDLL __declspec(dllexport)
 #endif
 
 #define RFNM_MHZ_TO_HZ(MHz) ((MHz) * 1000 * 1000ul)	// parens: MHZ_TO_HZ(f0 + 10) must expand to (f0 + 10) MHz
-#define RFNM_HZ_TO_MHZ(Hz) (Hz / (1000ul * 1000ul))
-#define RFNM_HZ_TO_KHZ(Hz) (Hz / 1000ul)
+#define RFNM_HZ_TO_MHZ(Hz) ((Hz) / (1000ul * 1000ul))
+#define RFNM_HZ_TO_KHZ(Hz) ((Hz) / 1000ul)
 
 namespace rfnm {
     struct transport_status {

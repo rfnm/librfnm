@@ -1,5 +1,12 @@
 cmake_minimum_required(VERSION 3.13)
-project(librfnm VERSION 0.3.2)
+
+# Version truth lives in include/librfnm/version.h (numeric triple; the pre-release
+# suffix there is display-only — CMake, pkg-config and the SONAME use the triple).
+foreach(comp MAJOR MINOR PATCH)
+  file(STRINGS include/librfnm/version.h _ver_line REGEX "#define RFNM_VERSION_${comp} ")
+  string(REGEX MATCH "[0-9]+" RFNM_VERSION_${comp} "${_ver_line}")
+endforeach()
+project(librfnm VERSION ${RFNM_VERSION_MAJOR}.${RFNM_VERSION_MINOR}.${RFNM_VERSION_PATCH})
 
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE RelWithDebInfo
@@ -51,9 +58,27 @@ add_library(rfnm_obj OBJECT ${SRC})
 # Enable building position independent code since that's required for a shared library
 set_property(TARGET rfnm_obj PROPERTY POSITION_INDEPENDENT_CODE ON)
 
+# The exported surface is exactly the MSDLL-decorated API: everything else compiles
+# hidden on GCC/Clang (MSVC exports via CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS instead).
+target_compile_options(rfnm_obj PRIVATE
+    $<$<OR:$<CXX_COMPILER_ID:GNU>,$<CXX_COMPILER_ID:Clang>,$<CXX_COMPILER_ID:AppleClang>>:-fvisibility=hidden -fvisibility-inlines-hidden>)
+
 # Link to static and dynamic libs
 add_library(rfnm_static STATIC $<TARGET_OBJECTS:rfnm_obj>)
 add_library(rfnm SHARED $<TARGET_OBJECTS:rfnm_obj>)
+
+# Shared-object versioning: SONAME tracks MAJOR.MINOR while the ABI is pre-1.0
+# (every 0.x bump may break ABI, so every 0.x bump gets its own SONAME).
+set_target_properties(rfnm PROPERTIES
+    VERSION ${PROJECT_VERSION}
+    SOVERSION ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR})
+
+# A statically-linked libusb must never re-export through librfnm.so: a consumer
+# linking its own libusb would interpose two copies (found live: a /usr/local
+# static-only libusb leaked all 136 libusb_* symbols into the .so).
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(rfnm PRIVATE LINKER:--exclude-libs,ALL)
+endif()
 
 # On platforms other than MSVC, make sure the static lib doesn't have "static" in its name
 if (NOT MSVC)
@@ -70,6 +95,15 @@ find_package(spdlog CONFIG REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(libusb REQUIRED IMPORTED_TARGET libusb-1.0)
 
+# Apple ld has no --exclude-libs: a static libusb there would re-export (see the
+# Linux note above). Homebrew ships libusb as a dylib, so this is normally moot —
+# but fail loudly instead of shipping a leaky dylib if someone links a .a.
+if(APPLE AND libusb_LINK_LIBRARIES MATCHES "\\.a$")
+    message(WARNING "libusb resolved to a static archive (${libusb_LINK_LIBRARIES}); "
+                    "its symbols would re-export from librfnm.dylib. Use the dynamic "
+                    "libusb (brew install libusb) for shippable builds.")
+endif()
+
 # Called to configure the object, static and dynamic targets, avoids code duplication
 function(configure_rfnm_target target)
     # Set C++ standard to C++17
@@ -85,7 +119,7 @@ function(configure_rfnm_target target)
     target_include_directories(${target} PUBLIC "include/")
 
     # Link to spdlog
-    target_link_libraries(${target} PRIVATE spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32>)
+    target_link_libraries(${target} PRIVATE spdlog::spdlog $<$<BOOL:${MINGW}>:ws2_32 iphlpapi>)
 
     # Link to libusb
     target_link_libraries(${target} PRIVATE PkgConfig::libusb)
@@ -126,8 +160,9 @@ if (MSVC AND NOT BUILD_SHARED_LIBS)
     install(FILES $<TARGET_RUNTIME_DLLS:rfnm> DESTINATION ${CMAKE_INSTALL_BINDIR})
 endif()
 
-# Install UDEV rules
-if (LINUX AND INSTALL_UDEV_RULES)
+# Install UDEV rules (CMAKE_SYSTEM_NAME, not LINUX: the LINUX variable only exists
+# on cmake >= 3.25, so the old check silently skipped the rules install)
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND INSTALL_UDEV_RULES)
     install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/rfnm.rules DESTINATION ${CMAKE_INSTALL_LIBDIR}/udev/rules.d)
 endif ()
 

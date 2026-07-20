@@ -8,6 +8,14 @@
 #include <cstdint>
 #include <cstddef>
 
+// The pack kernels promise the device's transfer granularities to the optimizer;
+// MSVC spells that hint __assume(0), GCC/Clang __builtin_unreachable().
+#if defined(_MSC_VER) && !defined(__clang__)
+#define RFNM_UNREACHABLE() __assume(0)
+#else
+#define RFNM_UNREACHABLE() __builtin_unreachable()
+#endif
+
 namespace rfnm {
     bool unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt);
     bool unpack_12_to_cf32(uint8_t* dest, uint8_t* src, size_t sample_cnt);

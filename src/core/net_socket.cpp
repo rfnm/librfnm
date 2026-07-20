@@ -8,6 +8,8 @@
 #include <ws2tcpip.h>
 #ifdef _MSC_VER
 #pragma comment(lib, "Ws2_32.lib")
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;	// MSVC has no POSIX ssize_t (MinGW provides its own)
 #endif
 typedef SOCKET native_sock_t;
 typedef int native_socklen_t;
@@ -177,9 +179,18 @@ bool net::sock_set_keepalive(uint64_t h) {
     }
 #ifndef _WIN32
     int idle = 5, intvl = 2, cnt = 3;
+#if defined(TCP_KEEPIDLE)
     setsockopt(to_native(h), IPPROTO_TCP, TCP_KEEPIDLE, &idle, sizeof(idle));
+#elif defined(TCP_KEEPALIVE)
+    // Darwin spells the idle-time option TCP_KEEPALIVE (TCP_KEEPIDLE is Linux-only)
+    setsockopt(to_native(h), IPPROTO_TCP, TCP_KEEPALIVE, &idle, sizeof(idle));
+#endif
+#ifdef TCP_KEEPINTVL
     setsockopt(to_native(h), IPPROTO_TCP, TCP_KEEPINTVL, &intvl, sizeof(intvl));
+#endif
+#ifdef TCP_KEEPCNT
     setsockopt(to_native(h), IPPROTO_TCP, TCP_KEEPCNT, &cnt, sizeof(cnt));
+#endif
 #endif
     return true;
 }

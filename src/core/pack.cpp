@@ -4,7 +4,7 @@
 
 // Wire packing note: samples travel as 12-bit pairs packed 2-per-3-bytes, decoded via
 // unaligned 64-bit loads - little-endian hosts only (x86 + the aarch64 boards). The
-// __builtin_unreachable hints promise the device's transfer granularities (64-sample
+// RFNM_UNREACHABLE hints promise the device's transfer granularities (64-sample
 // multiples from the variable-size packet sub granularity, 256-sample multiples on the
 // TX ring grid) so the vectorizer drops its peel loops.
 
@@ -20,7 +20,7 @@ bool rfnm::unpack_12_to_cs16(uint8_t* dest, uint8_t* src, size_t sample_cnt) {
 
 #ifdef __has_builtin
     if (sample_cnt & 63)
-        __builtin_unreachable();
+        RFNM_UNREACHABLE();
 #endif
 
     // process two samples at a time
@@ -121,7 +121,7 @@ void rfnm::pack_cs16_to_12(uint8_t* dest, uint8_t* src8, int sample_cnt) {
     uint16_t *src16 = (uint16_t *) src8;
     sample_cnt *= 4;
     if (sample_cnt & 255)
-        __builtin_unreachable();
+        RFNM_UNREACHABLE();
 
     while (sample_cnt >= 4) {
         int16_t i = (*src16++) >> 4;
@@ -148,7 +148,7 @@ bool rfnm::convert_cs16_to_cf32(uint8_t* dest, uint8_t* src, size_t sample_cnt) 
     size_t vals = sample_cnt * 2;
 #ifdef __has_builtin
     if (vals & 127)
-        __builtin_unreachable();
+        RFNM_UNREACHABLE();
 #endif
     for (size_t c = 0; c < vals; c++) {
         f[c] = s16[c] / 32767.0f;
@@ -162,7 +162,7 @@ bool rfnm::convert_cs16_to_cs8(uint8_t* dest, uint8_t* src, size_t sample_cnt) {
     size_t vals = sample_cnt * 2;
 #ifdef __has_builtin
     if (vals & 127)
-        __builtin_unreachable();
+        RFNM_UNREACHABLE();
 #endif
     for (size_t c = 0; c < vals; c++) {
         d[c] = (int8_t)(s16[c] >> 8);
