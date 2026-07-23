@@ -27,11 +27,6 @@ MSDLL device::device(enum transport transport, std::string address, uint32_t fla
     impl& m = *pimpl;
 
     m.open_flags = flags;
-    if (getenv("RFNM_NO_SM_RESET")) {
-        // deprecated alias for one release wave; the flag is the surface
-        spdlog::warn("RFNM_NO_SM_RESET is deprecated - open with OPEN_OBSERVER instead");
-        m.open_flags |= OPEN_OBSERVER;
-    }
 
     // default/native stream format
     m.transport_status.rx_stream_format = STREAM_FORMAT_CS16;

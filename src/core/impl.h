@@ -30,7 +30,7 @@
 #include "net_socket.h"
 #include "timebase.h"
 
-// TUP 3b (docs/tup-deletion-map-2026-07-17.md items 61/72): lib-internal marker for
+// TUP 3b (~/r/docs/tup-deletion-map-2026-07-17.md items 61/72): lib-internal marker for
 // schedule-positional bufs - the stamp is already final: the tx worker must skip the
 // anchor auto-stamp and feed_pos accounting (scheduled bursts are out-of-band vs the
 // sequential feed). STRIPPED at the wire copy; never leaves the process. Bit 30 sits

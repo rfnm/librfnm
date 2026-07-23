@@ -388,7 +388,7 @@ RFNM_PACKED_STRUCT(
 	// cc of the most recent late/stale POS placement: attribute a late event to a
 	// specific burst (last-event + counters, not a per-burst ledger)
 	uint64_t tx_last_late_usb_cc;
-	// ---- time unification step 1 (docs/time-unification-plan-2026-07-17.md) ----
+	// ---- time unification step 1 (~/r/docs/time-unification-plan-2026-07-17.md) ----
 	// THE one anchor, absolute: phytimer_now64 = (wrap_count << 32) | hw_low32,
 	// kernel-owned extension, SAMPLED AT REQUEST TIME (never a cached copy). phy_gen
 	// = LA9310 boot generation: ticks compare only within one gen; a gen move voids

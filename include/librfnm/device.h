@@ -86,7 +86,7 @@ namespace rfnm {
         uint8_t is_tx;
     };
 
-    // ---- the v2 timing/health/contract surface (docs/librfnm-v2-p2-surface-2026-07-14.md) ----
+    // ---- the v2 timing/health/contract surface (~/r/docs/librfnm-v2-p2-surface-2026-07-14.md) ----
 
     enum stream_dir {
         DIR_RX,
@@ -207,8 +207,7 @@ namespace rfnm {
 
     class device {
     public:
-        // flags: enum open_flags (OPEN_OBSERVER = attach without the SM reset; the
-        // RFNM_NO_SM_RESET env var is a deprecated alias for one release wave)
+        // flags: enum open_flags (OPEN_OBSERVER = attach without the SM reset)
         MSDLL explicit device(enum transport transport, std::string address = "", uint32_t flags = OPEN_DEFAULT);
         MSDLL ~device();
 
@@ -279,7 +278,7 @@ namespace rfnm {
         MSDLL std::string get_apply_error(uint8_t channel, bool tx);
 
         // ---- the apply timing handle ----
-        // (docs/phytimer-unified-contract-amendments-2026-07-13.md par.2/par.3)
+        // (~/r/docs/phytimer-unified-contract-amendments-2026-07-13.md par.2/par.3)
         // Which timelines the last apply()/rate reconfig actually broke (bit0 rx,
         // bit1 tx, bit2 dcs_freq reclock - re-read tick_hz/r/anchor step after that
         // one) + the at-apply wire-epoch snapshots the settle test compares against.
@@ -307,7 +306,7 @@ namespace rfnm {
         // must NOT open an RX stream just to read the clock (an RX apply on a TX
         // board steals the shared FE port).
         MSDLL rfnm_api_failcode clock_now(uint64_t *tick_ext);
-        // ---- time unification, one absolute anchor (docs/time-unification-plan-2026-07-17.md) ----
+        // ---- time unification, one absolute anchor (~/r/docs/time-unification-plan-2026-07-17.md) ----
         // The LA9310 phytimer made absolute: (wrap_count << 32) | hw_low32, kernel-owned
         // extension, FRESH AT REQUEST TIME (one status round trip - never a cached copy).
         // Ticks compare only within one phy_gen; a gen move means every outstanding time
