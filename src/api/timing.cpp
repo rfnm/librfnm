@@ -95,6 +95,17 @@ MSDLL rfnm_api_failcode device::get_timing(enum stream_dir dir, struct timing *t
     if (r != RFNM_API_OK) {
         return r;
     }
+    // tick_hz must track the LIVE clock plan: hwinfo is cached at open, and a session
+    // whose own apply crosses a DCS reclock otherwise mints every timestamp with the
+    // stale tick rate - constant-ratio skew of exactly dcs_new/dcs_old, every read
+    // flagged discontinuous (the "session-1 after cold boot" sickness and its whole
+    // ritual family, ledger #92 adm23). Refreshing here also refreshes the cache the
+    // per-read tick_to_ns conversions use; the stream-start get_timing() call is the
+    // one refresh point per arm (a reclock cannot happen under a live stream).
+    r = m.get(REQ_HWINFO);
+    if (r != RFNM_API_OK) {
+        return r;
+    }
     uint32_t raw_t0 = (dir == DIR_RX) ? m.dev_status.rx_t0 : m.dev_status.tx_t0;
     tick_ratio ratio{ (dir == DIR_RX) ? m.dev_status.rx_r_shift : m.dev_status.tx_r_shift };
     t->tick_hz = timebase::from_hwinfo(m.hwinfo).tick_hz;
