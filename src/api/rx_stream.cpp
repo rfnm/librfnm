@@ -15,8 +15,11 @@ MSDLL rx_stream::rx_stream(device &rfnm, uint8_t ch_ids) : dev(rfnm) {
 
     outbufsize = RFNM_USB_RX_PACKET_ELEM_CNT * dev.get_transport_status()->rx_stream_format;
 
-    // legacy clock only used if the device timing anchor is unavailable
-    ns_fallback = 1e9 / dev.get_hwinfo()->clock.samp_rate;
+    // legacy clock only used if the device timing anchor is unavailable; best-effort
+    // here (cached hwinfo) - start() recomputes from the refreshed cache, which is
+    // what actually matters (a DCS reclock between open and start skews this copy)
+    if (dev.get_hwinfo()->clock.samp_rate > 0)
+        ns_fallback = 1e9 / dev.get_hwinfo()->clock.samp_rate;
 }
 
 MSDLL rx_stream::~rx_stream() {
@@ -266,6 +269,11 @@ MSDLL rfnm_api_failcode rx_stream::start() {
     if (!timing_valid) {
         spdlog::warn("rx timing anchor unavailable - timestamps fall back to a counted clock");
     }
+    // get_timing just refreshed the hwinfo cache (stale-tick_hz law, c8d20ea): recompute
+    // the counted-clock period here so the fallback can never carry a rate from before a
+    // DCS reclock (the constructor's copy is captured at the most stale possible moment)
+    if (dev.get_hwinfo()->clock.samp_rate > 0)
+        ns_fallback = 1e9 / dev.get_hwinfo()->clock.samp_rate;
 
     ret = align_channels(true);
     if (ret) goto error;
