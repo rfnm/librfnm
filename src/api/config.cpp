@@ -208,7 +208,7 @@ MSDLL std::string device::get_apply_error(uint8_t channel, bool tx) {
     }
     case RFNM_REJ_DC_TRIM: {
         auto& ch = m.rx.ch[channel];
-        snprintf(msg, sizeof(msg), "rx%u rfic dc trim out of range: requested i=%d q=%d, allowed [-63..63]",
+        snprintf(msg, sizeof(msg), "rx%u rfic dc trim out of range: requested i=%d q=%d, allowed [-126..126]",
                 channel, (int)ch.rfic_dc_i, (int)ch.rfic_dc_q);
         break;
     }
