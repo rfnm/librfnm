@@ -282,8 +282,8 @@ MSDLL rfnm_api_failcode device::apply(uint16_t applies, bool confirm_execution, 
                     // the device says THIS apply actually broke the TX timeline (v5
                     // timing_break bit1: a real stream send / re-mint), so the feed
                     // axis rebases: feed position 0 airs at the NEW anchor. The mint
-                    // is NOT always synchronous with the apply result (Blue: yes;
-                    // geul: ~800 ms async FE programming) - so the session anchor
+                    // is NOT always synchronous with the apply result (some device
+                    // families mint ~800 ms async FE programming) - so the session anchor
                     // latch is INVALIDATED here, not re-latched: it pins at the
                     // client's next tx_feed_seek_to (after apply_timing_settled) or
                     // at the first stamped packet. Stamping from a possibly-stale

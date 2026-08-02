@@ -288,8 +288,9 @@ namespace rfnm {
         // ONE status refresh + the advance-past test: true once every broken
         // direction's wire epoch moved PAST its snapshot (fresh anchor live). This
         // replaces every wait-for-epoch-change / warm-two-sessions ritual on both
-        // families (Blue: usually true at first poll; geul: flips when the ~800 ms
-        // async mint lands). Errors ride the status path's loud dead-latches - a dead
+        // families (usually true at first poll; on devices with async FE programming
+        // it flips when the ~800 ms mint lands). Errors ride the status path's loud
+        // dead-latches - a dead
         // board fails this call, it never wedges the poll loop.
         MSDLL rfnm_api_failcode apply_timing_settled(bool *settled);
 
