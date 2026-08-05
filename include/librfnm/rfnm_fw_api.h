@@ -221,6 +221,8 @@ enum rfnm_reject_field {
 	RFNM_REJ_RATE,
 	RFNM_REJ_CH_MISSING,
 	RFNM_REJ_DEVICE,
+	RFNM_REJ_BOOT,		// radio bring-up incomplete: the board refused the session
+				// verb until its boot script signals the driver stack is up
 };
 
 RFNM_PACKED_STRUCT(
@@ -547,9 +549,12 @@ RFNM_PACKED_STRUCT(
 #define RFNM_USB_RX_PACKET_DATA_SIZE (RFNM_USB_RX_PACKET_SIZE - RFNM_USB_RX_PACKET_HEAD_SIZE)
 #define RFNM_USB_RX_PACKET_ELEM_CNT (RFNM_USB_RX_PACKET_DATA_SIZE / 3)
 
-// payload encoding carried in the packet head fmt field. USB/TCP always use
+// payload encoding carried in the packet head fmt field. USB always uses
 // PACKED12 (wire bandwidth); the local transport uses CS16 so neither side ever
-// packs or unpacks on the same SoC. Consumers branch per packet.
+// packs or unpacks on the same SoC. TCP ships whatever the packet declares:
+// PACKED12 when a remote session owns the radio, CS16 while a local session
+// does - so a remote listener keeps receiving across a local takeover instead
+// of silently starving (defect #96). Consumers branch per packet.
 #define RFNM_PACKET_FMT_PACKED12 0
 #define RFNM_PACKET_FMT_CS16 1
 

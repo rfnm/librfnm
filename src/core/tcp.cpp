@@ -215,25 +215,31 @@ rx_pass_result device::impl::tcp_rx_pass(worker_ctx &c) {
     bool tcp_rx_ok = false;
     {
         std::lock_guard<std::mutex> lock(tcp_data_rx_mutex);
-        // v2 framing: head first, then exactly the declared PACKED12 payload
-        // (elem_cnt * 3) - the RX wire mirrors the TX direction's variable framing.
-        // Fixed full-size records would floor RX latency at the 80-slot fill (333 us
-        // at 61.44M) and make the rx_ship_slots / partial-flush levers TCP-dead.
-        // A v1 board desyncs loudly on the magic check below.
+        // v2 framing: head first, then exactly the payload the head declares -
+        // elem_cnt elements of the head's fmt (PACKED12 3 B/elem, CS16 4 B/elem).
+        // The RX wire mirrors the TX direction's variable framing: fixed full-size
+        // records would floor RX latency at the 80-slot fill (333 us at 61.44M) and
+        // make the rx_ship_slots / partial-flush levers TCP-dead. CS16 records
+        // arrive while a LOCAL session owns the radio format (defect #96: the old
+        // board dropped those wire-side, silently starving every remote reader);
+        // c.lrxbuf is RFNM_LOCAL_RX_PACKET_SIZE so a full CS16 record fits, and the
+        // deliver path branches per packet. A v1 board desyncs loudly on the magic
+        // check below.
         tcp_rx_ok = net::read_exact(tcp_data_socket, (uint8_t*)c.lrxbuf, RFNM_USB_RX_PACKET_HEAD_SIZE);
         if (tcp_rx_ok) {
             if (c.lrxbuf->magic != 0x7ab8bd6f || c.lrxbuf->elem_cnt == 0 ||
-                    c.lrxbuf->elem_cnt > RFNM_USB_RX_PACKET_ELEM_CNT) {
+                    c.lrxbuf->elem_cnt > RFNM_USB_RX_PACKET_ELEM_CNT ||
+                    (c.lrxbuf->fmt != RFNM_PACKET_FMT_PACKED12 && c.lrxbuf->fmt != RFNM_PACKET_FMT_CS16)) {
                 // a reliable byte stream only desyncs on a protocol bug (or a
                 // v1 sender) - poison the socket so the session fails loudly
                 // instead of spraying garbage packets upward
-                spdlog::error("TCP RX framing lost (magic {:x} elem_cnt {}) - v1 board or protocol bug, dropping connection",
-                    (uint32_t)c.lrxbuf->magic, (uint32_t)c.lrxbuf->elem_cnt);
+                spdlog::error("TCP RX framing lost (magic {:x} fmt {} elem_cnt {}) - v1 board or protocol bug, dropping connection",
+                    (uint32_t)c.lrxbuf->magic, (uint32_t)c.lrxbuf->fmt, (uint32_t)c.lrxbuf->elem_cnt);
                 net::sock_shutdown(tcp_data_socket);
                 tcp_rx_ok = false;
             } else {
                 tcp_rx_ok = net::read_exact(tcp_data_socket, (uint8_t*)c.lrxbuf->buf,
-                    (size_t)c.lrxbuf->elem_cnt * 3);
+                    (size_t)c.lrxbuf->elem_cnt * (c.lrxbuf->fmt == RFNM_PACKET_FMT_CS16 ? 4 : 3));
             }
         }
 

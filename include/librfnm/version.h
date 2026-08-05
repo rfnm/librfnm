@@ -6,7 +6,7 @@
 // machine-compared values (CMake, pkg-config, SONAME) use only the numeric triple.
 #define RFNM_VERSION_MAJOR 0
 #define RFNM_VERSION_MINOR 2
-#define RFNM_VERSION_PATCH 1
+#define RFNM_VERSION_PATCH 2
 #define RFNM_VERSION_SUFFIX "-beta"
 
 #define RFNM_VERSION_STR2(x) #x

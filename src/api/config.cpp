@@ -161,6 +161,7 @@ static const char* rfnm_rej_field_name(uint8_t f) {
     case RFNM_REJ_RATE: return "sample rate / stream plan";
     case RFNM_REJ_CH_MISSING: return "channel presence";
     case RFNM_REJ_DEVICE: return "device apply";
+    case RFNM_REJ_BOOT: return "radio bring-up";
     default: return "(unattributed)";
     }
 }
@@ -231,6 +232,10 @@ MSDLL std::string device::get_apply_error(uint8_t channel, bool tx) {
         break;
     case RFNM_REJ_CH_MISSING:
         snprintf(msg, sizeof(msg), "%s%u is not present on this device (apply mask named an absent channel)", dir, channel);
+        break;
+    case RFNM_REJ_BOOT:
+        snprintf(msg, sizeof(msg), "%s%u refused: radio bring-up still in progress on the device (boots take ~20 s; retry shortly)",
+                dir, channel);
         break;
     case RFNM_REJ_DEVICE:
         snprintf(msg, sizeof(msg), "%s%u device-layer apply failed: %s (not a validation error - see board dmesg)",
